@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Outfit Lookbook — Smart Closet & Style Engine</title>
+  <!-- Editorial Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+
+  <!-- Top Editorial Navigation Bar -->
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="brand-block">
+        <a href="/" class="brand-logo">
+          <span class="brand-title">Smart Closet</span>
+          <span class="brand-subtitle">Archive &amp; Style Engine // Gemini 2.5</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary Navigation">
+          <a href="/" class="nav-tab">01 / My Wardrobe</a>
+          <a href="/outfits" class="nav-tab active">02 / Outfit Lookbook</a>
+        </nav>
+      </div>
+
+      <div class="header-actions">
+        <button type="button" id="btnApiKeyModal" class="engine-pill" title="Configure Gemini API Key">
+          <span id="engineStatusDot" class="status-dot"></span>
+          <span id="engineStatusText">Gemini 2.5 Stylist</span>
+        </button>
+        <a href="/" class="btn btn-outline">
+          ← Back to Wardrobe
+        </a>
+        <button type="button" id="btnGenerateHeader" class="btn btn-primary">
+          ✦ Generate Outfits
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Lookbook Content -->
+  <main class="main-container">
+    <section class="editorial-banner">
+      <div>
+        <h1 class="editorial-headline">
+          AI Curated <span class="serif-italic">Seasonal Lookbook</span>
+        </h1>
+        <p class="editorial-subcopy">
+          Gemini 2.5 Flash synthesizes your personal wardrobe catalog into cohesive ensembles—balancing silhouette proportions, tonal palettes, and layering depth.
+        </p>
+      </div>
+
+      <div class="telemetry-strip">
+        <div class="telemetry-item">
+          <span class="telemetry-value" id="statCatalogCount">0</span>
+          <span class="telemetry-label">Wardrobe Pieces</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-value" id="statLookCount">0</span>
+          <span class="telemetry-label">Curated Looks</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Vibe / Season Selector Bar -->
+    <section class="vibe-selector-bar" aria-label="Styling Vibe Controls">
+      <div>
+        <div style="font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 8px;">
+          Select Styling Direction / Vibe
+        </div>
+        <div class="vibe-pills" id="vibePills">
+          <button type="button" class="vibe-pill active" data-vibe="Editorial Mix">Editorial Mix</button>
+          <button type="button" class="vibe-pill" data-vibe="Minimalist">Minimalist</button>
+          <button type="button" class="vibe-pill" data-vibe="Casual">Casual</button>
+          <button type="button" class="vibe-pill" data-vibe="Layered">Layered</button>
+          <button type="button" class="vibe-pill" data-vibe="Workwear">Workwear</button>
+          <button type="button" class="vibe-pill" data-vibe="Streetwear">Streetwear</button>
+          <button type="button" class="vibe-pill" data-vibe="Formal">Formal</button>
+        </div>
+      </div>
+
+      <button type="button" id="btnGenerateMain" class="btn btn-primary" style="padding: 12px 22px;">
+        ✦ Synthesize New Lookbook
+      </button>
+    </section>
+
+    <!-- Lookbook Collection Grid -->
+    <section id="lookbookGrid" class="lookbook-grid" aria-live="polite"></section>
+
+    <!-- Empty Lookbook State -->
+    <div id="emptyLookbook" class="empty-state" style="display: none;">
+      <div class="empty-state-icon">✨</div>
+      <h2 class="empty-state-title">No Lookbook Combinations Generated Yet</h2>
+      <p class="empty-state-copy">
+        Select a vibe above and click <strong>"Synthesize New Lookbook"</strong> to let Gemini 2.5 Flash build cohesive outfits from the pieces in your digital closet.
+      </p>
+      <div class="empty-state-actions">
+        <button type="button" id="btnEmptyGenerate" class="btn btn-primary">
+          ✦ Generate Outfits Now
+        </button>
+        <a href="/" class="btn btn-outline">
+          Manage Wardrobe Catalog
+        </a>
+      </div>
+    </div>
+  </main>
+
+  <!-- Gemini API Key Modal -->
+  <div class="modal-backdrop" id="apiKeyModal" role="dialog" aria-modal="true">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Gemini 2.5 Flash Configuration</h3>
+        <button type="button" class="modal-close" data-close="apiKeyModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.85rem; color: var(--text-secondary);">
+          Paste your Google Gemini API key below if it is not already configured in your server's <code>GEMINI_API_KEY</code> environment variable.
+        </p>
+        <div class="form-group">
+          <label class="form-label" for="inputGeminiKey">Google Gemini API Key</label>
+          <input type="password" id="inputGeminiKey" class="form-input" placeholder="AIzaSy..." />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="btnClearApiKey" class="btn btn-ghost">Clear Key</button>
+        <button type="button" id="btnSaveApiKey" class="btn btn-primary">Save Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/static/js/outfits.js"></script>
+</body>
+</html>

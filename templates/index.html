@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Wardrobe — Smart Closet & Style Engine</title>
+  <!-- Editorial Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+
+  <!-- Top Editorial Navigation Bar -->
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="brand-block">
+        <a href="/" class="brand-logo">
+          <span class="brand-title">Smart Closet</span>
+          <span class="brand-subtitle">Archive &amp; Style Engine // Gemini 2.5</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary Navigation">
+          <a href="/" class="nav-tab active">01 / My Wardrobe</a>
+          <a href="/outfits" class="nav-tab">02 / Outfit Lookbook</a>
+        </nav>
+      </div>
+
+      <div class="header-actions">
+        <button type="button" id="btnApiKeyModal" class="engine-pill" title="Configure Gemini API Key">
+          <span id="engineStatusDot" class="status-dot"></span>
+          <span id="engineStatusText">Gemini 2.5 Flash</span>
+        </button>
+        <button type="button" id="btnSeedDemo" class="btn btn-outline">
+          + Load Studio Capsule
+        </button>
+        <button type="button" id="btnOpenUpload" class="btn btn-outline">
+          ↑ Upload Piece
+        </button>
+        <a href="/outfits" class="btn btn-primary">
+          Generate Outfits →
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Storefront Content -->
+  <main class="main-container">
+    <section class="editorial-banner">
+      <div>
+        <h1 class="editorial-headline">
+          Shop Your Own <span class="serif-italic">Personal Archive</span>
+        </h1>
+        <p class="editorial-subcopy">
+          Every garment is indexed by Gemini 2.5 Flash Vision for silhouette, color nuance, and texture. Click any tag on a card to refine metadata in-place or track daily wear rotation.
+        </p>
+      </div>
+
+      <div class="telemetry-strip" aria-label="Wardrobe Telemetry">
+        <div class="telemetry-item">
+          <span class="telemetry-value" id="statTotal">0</span>
+          <span class="telemetry-label">Total Pieces</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-value" id="statNeverWorn">0</span>
+          <span class="telemetry-label">Never Worn</span>
+        </div>
+        <div class="telemetry-item">
+          <span class="telemetry-value" id="statWornToday">0</span>
+          <span class="telemetry-label">Worn Today</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Filter & Search Controls -->
+    <section class="filter-toolbar" aria-label="Catalog Filters">
+      <div class="category-tabs" id="categoryTabs">
+        <button class="cat-tab active" data-category="all">
+          All <span class="cat-count" id="count-all">0</span>
+        </button>
+        <button class="cat-tab" data-category="tops">
+          Tops <span class="cat-count" id="count-tops">0</span>
+        </button>
+        <button class="cat-tab" data-category="outerwear">
+          Outerwear <span class="cat-count" id="count-outerwear">0</span>
+        </button>
+        <button class="cat-tab" data-category="bottoms">
+          Bottoms <span class="cat-count" id="count-bottoms">0</span>
+        </button>
+        <button class="cat-tab" data-category="footwear">
+          Footwear <span class="cat-count" id="count-footwear">0</span>
+        </button>
+        <button class="cat-tab" data-category="accessories">
+          Accessories <span class="cat-count" id="count-accessories">0</span>
+        </button>
+      </div>
+
+      <div class="search-sort-group">
+        <div class="search-input-wrap">
+          <span class="search-icon">⌕</span>
+          <input
+            type="search"
+            id="searchInput"
+            class="search-input"
+            placeholder="Search color, fit, type, vibe..."
+            aria-label="Search wardrobe"
+          />
+        </div>
+        <select id="sortSelect" class="sort-select" aria-label="Sort wardrobe">
+          <option value="newest">Sort: Newest Added</option>
+          <option value="never_worn">Sort: Never Worn First</option>
+          <option value="recently_worn">Sort: Recently Worn</option>
+          <option value="category">Sort: Category (A–Z)</option>
+          <option value="color">Sort: Color (A–Z)</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- Product Grid Container -->
+    <section id="productGrid" class="product-grid" aria-live="polite"></section>
+
+    <!-- Empty Wardrobe State -->
+    <div id="emptyState" class="empty-state" style="display: none;">
+      <div class="empty-state-icon">🧥</div>
+      <h2 class="empty-state-title">Your Digital Wardrobe is Empty</h2>
+      <p class="empty-state-copy">
+        Upload a garment photo (or snap one with your camera) for automatic Gemini 2.5 Vision tagging, or load our 8-piece archival studio capsule to test the style engine right away.
+      </p>
+      <div class="empty-state-actions">
+        <button type="button" id="btnEmptyUpload" class="btn btn-primary">
+          ↑ Upload First Piece
+        </button>
+        <button type="button" id="btnEmptySeed" class="btn btn-outline">
+          + Load 8-Piece Studio Capsule
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <!-- =====================================================================
+       Modal 1: Upload / Camera Capture & Gemini Vision Ingestion
+       ===================================================================== -->
+  <div class="modal-backdrop" id="uploadModal" role="dialog" aria-modal="true" aria-labelledby="uploadModalTitle">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="uploadModalTitle">Catalog New Garment // Gemini Vision</h3>
+        <button type="button" class="modal-close" data-close="uploadModal">&times;</button>
+      </div>
+      <form id="uploadForm">
+        <div class="modal-body">
+          <div class="upload-mode-tabs">
+            <button type="button" class="btn btn-sm btn-primary" id="tabFileMode">File / Drag &amp; Drop</button>
+            <button type="button" class="btn btn-sm btn-outline" id="tabCameraMode">Camera Capture</button>
+          </div>
+
+          <!-- Drag & Drop Zone -->
+          <div id="dropzoneArea" class="dropzone">
+            <input type="file" id="fileInput" name="image" accept="image/*" hidden />
+            <p style="font-weight: 600; margin-bottom: 4px;">Drag &amp; drop garment photo here</p>
+            <p style="font-size: 0.78rem; color: var(--text-muted);">or click to browse JPG, PNG, WEBP (Max 16MB)</p>
+          </div>
+
+          <!-- Live Camera Stream Box -->
+          <div id="cameraArea" class="camera-box">
+            <video id="cameraStream" autoplay playsinline muted></video>
+            <button type="button" id="btnCapturePhoto" class="btn btn-sm btn-primary">Snap Frame</button>
+          </div>
+
+          <!-- Image Preview -->
+          <div id="previewContainer" class="preview-container">
+            <img id="imagePreview" src="" alt="Garment upload preview" />
+          </div>
+
+          <p style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-secondary);">
+            Gemini 2.5 Flash Vision will automatically extract <strong>type</strong>, <strong>category</strong>, <strong>color</strong>, <strong>fit</strong>, and <strong>aesthetic description</strong>. Size defaults to <code>null</code> until assigned.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" data-close="uploadModal">Cancel</button>
+          <button type="submit" id="btnSubmitUpload" class="btn btn-primary">
+            Analyze &amp; Add to Closet
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Modal 2: Quick-Edit Garment Metadata Drawer
+       ===================================================================== -->
+  <div class="modal-backdrop" id="editModal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="editModalTitle">Refine Garment Attributes</h3>
+        <button type="button" class="modal-close" data-close="editModal">&times;</button>
+      </div>
+      <form id="editForm">
+        <input type="hidden" id="editItemId" />
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label" for="editType">Garment Type</label>
+              <input type="text" id="editType" class="form-input" required placeholder="e.g., vintage work jacket" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="editCategory">Category</label>
+              <select id="editCategory" class="form-select">
+                <option value="tops">tops</option>
+                <option value="outerwear">outerwear</option>
+                <option value="bottoms">bottoms</option>
+                <option value="footwear">footwear</option>
+                <option value="accessories">accessories</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="editColor">Color Nuance</label>
+              <input type="text" id="editColor" class="form-input" required placeholder="e.g., faded tobacco brown" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="editFit">Silhouette / Fit</label>
+              <input type="text" id="editFit" class="form-input" required placeholder="e.g., boxy, relaxed, straight-leg" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="editSize">Size (Optional / Null)</label>
+              <input type="text" id="editSize" class="form-input" placeholder="Unassigned (e.g., M, L, 32, 42)" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="editLastWorn">Last Worn Date</label>
+              <input type="date" id="editLastWorn" class="form-input" />
+            </div>
+            <div class="form-group full-width">
+              <label class="form-label" for="editDescription">Archival &amp; Aesthetic Description</label>
+              <textarea id="editDescription" rows="3" class="form-textarea" placeholder="Details on textures, hardware, stitching, and vibe..."></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="btnDeleteItem" class="btn btn-ghost" style="color: var(--danger-text);">
+            Delete Piece
+          </button>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" class="btn btn-ghost" data-close="editModal">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Modal 3: Gemini API Key Settings (Optional Local Override)
+       ===================================================================== -->
+  <div class="modal-backdrop" id="apiKeyModal" role="dialog" aria-modal="true" aria-labelledby="apiKeyModalTitle">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="apiKeyModalTitle">Gemini 2.5 Flash Configuration</h3>
+        <button type="button" class="modal-close" data-close="apiKeyModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.85rem; color: var(--text-secondary);">
+          The backend automatically uses the <code>GEMINI_API_KEY</code> environment variable if set. You can also paste an API key below to store it in your browser session and pass it to the Flask backend.
+        </p>
+        <div class="form-group">
+          <label class="form-label" for="inputGeminiKey">Google Gemini API Key</label>
+          <input type="password" id="inputGeminiKey" class="form-input" placeholder="AIzaSy..." />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="btnClearApiKey" class="btn btn-ghost">Clear Saved Key</button>
+        <button type="button" id="btnSaveApiKey" class="btn btn-primary">Save Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/static/js/closet.js"></script>
+</body>
+</html>
