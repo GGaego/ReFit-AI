@@ -126,6 +126,11 @@ def get_connection() -> Iterator[sqlite3.Connection]:
     if os.path.exists(DB_PATH):
         if not os.path.exists(_TMP_DB_PATH) or os.path.getmtime(DB_PATH) > os.path.getmtime(_TMP_DB_PATH):
             shutil.copy2(DB_PATH, _TMP_DB_PATH)
+    elif os.path.exists(_TMP_DB_PATH):
+        try:
+            os.remove(_TMP_DB_PATH)
+        except OSError:
+            pass
 
     conn = sqlite3.connect(_TMP_DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -171,6 +176,11 @@ def init_db() -> None:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
+        )
+
+        # Issue 1: Remove any programmatically generated studio capsule SVG records on initialization
+        conn.execute(
+            "DELETE FROM clothes WHERE image_url LIKE '%/demo_%.svg' OR image_url LIKE 'demo_%.svg'"
         )
 
         clothes_rows = conn.execute("SELECT id, category FROM clothes").fetchall()

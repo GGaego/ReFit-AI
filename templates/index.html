@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>My Wardrobe — Smart Closet &amp; Style Engine</title>
+  <title>My Wardrobe — ReFit AI &amp; Style Engine</title>
   <!-- Editorial Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,8 +17,8 @@
     <div class="header-inner">
       <div class="brand-block">
         <a href="/" class="brand-logo">
-          <span class="brand-title">Smart Closet</span>
-          <span class="brand-subtitle">Archive &amp; Style Engine // Gemini 2.5</span>
+          <span class="brand-title">ReFit AI</span>
+          <span class="brand-subtitle">Wear More. Buy Less // Saving Textiles</span>
         </a>
         <nav class="nav-links" aria-label="Primary Navigation">
           <a href="/" class="nav-tab active">01 / My Wardrobe</a>
@@ -33,9 +33,6 @@
         </button>
         <button type="button" id="btnOpenEvaluator" class="btn btn-scanner">
           🛍️ Buy Less
-        </button>
-        <button type="button" id="btnSeedDemo" class="btn btn-outline">
-          + Load Studio Capsule
         </button>
         <button type="button" id="btnOpenUpload" class="btn btn-outline">
           ↑ Upload Piece
@@ -74,8 +71,6 @@
         </div>
       </div>
     </section>
-
-
 
     <!-- Filter & Search Controls -->
     <section class="filter-toolbar" aria-label="Catalog Filters">
@@ -135,14 +130,11 @@
       <div class="empty-state-icon">🧥</div>
       <h2 class="empty-state-title">No Matching Pieces in This View</h2>
       <p class="empty-state-copy">
-        Upload a garment photo (or snap one with your camera) for automatic Gemini 2.5 Vision tagging, or load our 8-piece archival studio capsule to test the style engine right away.
+        Upload a garment photo (or snap one with your camera) for automatic Gemini 2.5 Vision tagging to build your personal wardrobe archive.
       </p>
       <div class="empty-state-actions">
         <button type="button" id="btnEmptyUpload" class="btn btn-primary">
           ↑ Upload Piece
-        </button>
-        <button type="button" id="btnEmptySeed" class="btn btn-outline">
-          + Load 8-Piece Studio Capsule
         </button>
       </div>
     </div>
@@ -183,7 +175,7 @@
           </div>
 
           <p style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-secondary);">
-            Gemini 2.5 Flash Vision will automatically extract <strong>name/type</strong>, <strong>category</strong>, <strong>color</strong>, <strong>fit</strong>, and <strong>style notes</strong>. If offline or no API key is set, safe <code>Unassigned</code> defaults are applied.
+            Gemini 2.5 Flash Vision will automatically extract <strong>name/type</strong>, <strong>category</strong>, <strong>color</strong>, <strong>fit</strong>, and <strong>style notes</strong>. Exact duplicate image files are automatically detected and rejected.
           </p>
         </div>
         <div class="modal-footer">
@@ -197,7 +189,7 @@
   </div>
 
   <!-- =====================================================================
-       Modal 2: Quick-Edit Garment Metadata Drawer (Issue Fix 2 & 3)
+       Modal 2: Quick-Edit Garment Metadata Drawer
        ===================================================================== -->
   <div class="modal-backdrop" id="editModal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle">
     <div class="modal-dialog">
@@ -208,7 +200,7 @@
       <form id="editForm">
         <input type="hidden" id="editItemId" />
         <div class="modal-body">
-          <!-- Issue Fix 3: Prompt notice when editing an item with Unassigned fallback defaults -->
+          <!-- Prompt notice when editing an item with Unassigned fallback defaults -->
           <div id="editUnassignedNotice" class="unassigned-notice-banner">
             ⚠️ AI tagging was unavailable when this item was added. Please assign a canonical <strong>Category</strong> and update the <strong>Unassigned</strong> attributes below.
           </div>
@@ -266,49 +258,62 @@
   </div>
 
   <!-- =====================================================================
-       Modal 3: Feature 1 — "Should I Buy It?" In-Store Evaluator
+       Modal 3: Feature 1 — "Buy Less" In-Store Evaluator
        ===================================================================== -->
   <div class="modal-backdrop" id="evaluatorModal" role="dialog" aria-modal="true" aria-labelledby="evaluatorModalTitle">
     <div class="modal-dialog modal-lg">
       <div class="modal-header">
-        <h3 class="modal-title" id="evaluatorModalTitle">🛍️ "Should I Buy It?" // In-Store Purchase Evaluator</h3>
+        <div>
+          <h3 class="modal-title" id="evaluatorModalTitle">🛍️ Buy Less // In-Store Purchase Evaluator</h3>
+          <p class="modal-subtitle">Evaluate whether a new piece truly earns a place in your personal archive</p>
+        </div>
         <button type="button" class="modal-close" data-close="evaluatorModal">&times;</button>
       </div>
       <form id="evaluatorForm">
         <div class="modal-body">
-          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
-            <div class="upload-mode-tabs">
-              <button type="button" class="btn btn-sm btn-primary" id="evalTabFileMode">Photo Upload / Mobile Camera</button>
-              <button type="button" class="btn btn-sm btn-outline" id="evalTabCameraMode">Live Webcam Stream</button>
+          <!-- Candidate Input Panel -->
+          <div class="eval-input-panel">
+            <div class="eval-toolbar-row">
+              <div class="upload-mode-tabs">
+                <button type="button" class="btn btn-sm btn-primary" id="evalTabFileMode">Photo Upload / Mobile Camera</button>
+                <button type="button" class="btn btn-sm btn-outline" id="evalTabCameraMode">Live Webcam Stream</button>
+              </div>
+              <span class="eval-helper-tag">
+                Checks overlap &amp; outfit versatility against your closet
+              </span>
             </div>
-            <span style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted);">
-              Compares candidate photo against your current closet catalog
-            </span>
-          </div>
 
-          <!-- File Upload / Mobile Camera Input -->
-          <div id="evalDropzoneArea" class="dropzone">
-            <input type="file" id="evalFileInput" name="image" accept="image/*" capture="environment" hidden />
-            <p style="font-weight: 600; margin-bottom: 4px;">Snap a photo in-store or drop candidate garment image here</p>
-            <p style="font-size: 0.78rem; color: var(--text-muted);">Supports mobile camera capture &amp; image files (JPG, PNG, WEBP)</p>
-          </div>
+            <div class="eval-capture-grid">
+              <!-- File Upload / Mobile Camera Input -->
+              <div id="evalDropzoneArea" class="dropzone eval-dropzone">
+                <input type="file" id="evalFileInput" name="image" accept="image/*" capture="environment" hidden />
+                <p class="dropzone-title">Snap a photo in-store or drop candidate garment image here</p>
+                <p class="dropzone-sub">Supports mobile camera capture &amp; image files (JPG, PNG, WEBP)</p>
+              </div>
 
-          <!-- Live Webcam Capture -->
-          <div id="evalCameraArea" class="camera-box">
-            <video id="evalCameraStream" autoplay playsinline muted></video>
-            <button type="button" id="btnEvalCapturePhoto" class="btn btn-sm btn-primary">Capture Candidate Frame</button>
-          </div>
+              <!-- Live Webcam Capture -->
+              <div id="evalCameraArea" class="camera-box">
+                <video id="evalCameraStream" autoplay playsinline muted></video>
+                <button type="button" id="btnEvalCapturePhoto" class="btn btn-sm btn-primary">Capture Candidate Frame</button>
+              </div>
 
-          <!-- Candidate Preview -->
-          <div id="evalPreviewContainer" class="preview-container">
-            <img id="evalImagePreview" src="" alt="Candidate garment preview" />
+              <!-- Candidate Preview -->
+              <div id="evalPreviewContainer" class="preview-container eval-preview-box">
+                <img id="evalImagePreview" src="" alt="Candidate garment preview" />
+              </div>
+            </div>
           </div>
 
           <!-- Evaluation Results Section -->
           <div id="evalResultsSection" class="eval-results-wrap" aria-live="polite">
+            <div class="eval-section-divider">
+              <span>Buy Less Recommendation &amp; Closet Analysis</span>
+            </div>
+
+            <!-- Verdict & Outfit Metric Banner -->
             <div class="eval-verdict-banner">
-              <div style="flex: 1; min-width: 240px;">
-                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <div class="eval-verdict-main">
+                <div class="eval-verdict-header">
                   <span id="evalDecisionBadge" class="eval-badge decision-buy">BUY</span>
                   <div id="evalCandidateMeta" class="metadata-pills"></div>
                 </div>
@@ -322,14 +327,22 @@
 
             <!-- Similarity / Redundancy Alert -->
             <div id="evalRedundancyAlert" class="eval-redundancy-alert not-redundant">
-              <span id="evalRedundancyIcon">✓</span>
-              <span id="evalRedundancyText">No redundant duplicates detected in your current closet.</span>
+              <span id="evalRedundancyIcon" class="eval-redundancy-icon">✓</span>
+              <div class="eval-redundancy-body">
+                <span class="eval-redundancy-kicker">Wardrobe Overlap Check</span>
+                <span id="evalRedundancyText">No redundant duplicates detected in your current closet.</span>
+              </div>
             </div>
 
             <!-- Top 3 Outfits -->
-            <div>
-              <div class="manifest-heading" style="margin-bottom: 10px;">
-                Top 3 Outfits with Your Existing Closet
+            <div class="eval-outfits-section">
+              <div class="eval-outfits-heading-row">
+                <span class="manifest-heading" style="margin-bottom: 0;">
+                  Top 3 Outfits with Your Existing Closet
+                </span>
+                <span class="eval-outfits-sub">
+                  Candidate piece styled with items you already own
+                </span>
               </div>
               <div id="evalTopOutfitsGrid" class="eval-outfits-grid"></div>
             </div>
@@ -339,7 +352,7 @@
         <div class="modal-footer">
           <button type="button" class="btn btn-ghost" data-close="evaluatorModal">Close</button>
           <button type="submit" id="btnSubmitEvaluation" class="btn btn-primary">
-            ✦ Evaluate Purchase
+            ✦ Evaluate with Buy Less
           </button>
         </div>
       </form>

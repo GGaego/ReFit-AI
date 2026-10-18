@@ -3,8 +3,9 @@ import re
 import json
 import uuid
 import base64
+import hashlib
 import mimetypes
-from datetime import date, timedelta
+from datetime import date
 from typing import Dict, Any, List, Optional, Tuple
 
 from flask import (
@@ -56,8 +57,40 @@ app.jinja_loader = ChoiceLoader([
     FileSystemLoader(BASE_DIR),
 ])
 
-# Ensure SQLite tables exist and legacy records are normalized at startup
+
+def cleanup_programmatic_demo_files() -> None:
+    """Remove any leftover programmatically generated demo SVG files on initialization."""
+    if not os.path.isdir(UPLOAD_FOLDER):
+        return
+    known_demos = [
+        "demo_work_jacket.svg",
+        "demo_ecru_tee.svg",
+        "demo_poplin_shirt.svg",
+        "demo_charcoal_knit.svg",
+        "demo_selvedge_jeans.svg",
+        "demo_olive_cargos.svg",
+        "demo_penny_loafers.svg",
+        "demo_leather_belt.svg",
+    ]
+    candidates = set(known_demos)
+    try:
+        for fname in os.listdir(UPLOAD_FOLDER):
+            if fname.startswith("demo_") and fname.lower().endswith(".svg"):
+                candidates.add(fname)
+    except OSError:
+        pass
+    for fname in candidates:
+        fpath = os.path.join(UPLOAD_FOLDER, fname)
+        if os.path.exists(fpath):
+            try:
+                os.remove(fpath)
+            except OSError:
+                pass
+
+
+# Ensure SQLite tables exist, legacy records are normalized, and demo SVGs are removed at startup
 database.init_db()
+cleanup_programmatic_demo_files()
 
 # ---------------------------------------------------------------------------
 # Gemini System Prompts (Strict Schemas)
@@ -148,11 +181,70 @@ Return ONLY a strict JSON object matching this exact schema:
 
 
 # ---------------------------------------------------------------------------
-# Utility & AI Helper Functions
+# Utility, Duplicate Detection & AI Helper Functions
 # ---------------------------------------------------------------------------
 
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def compute_bytes_sha256(data: bytes) -> str:
+    """Compute SHA-256 hex digest for raw image bytes."""
+    return hashlib.sha256(data).hexdigest()
+
+
+def find_duplicate_closet_image(image_bytes: bytes) -> Optional[Dict[str, Any]]:
+    """
+    Issue 3 / Feat 3: Check whether the exact image file is already present in the closet.
+    Compares SHA-256 digest and raw byte equality against:
+    1. All existing closet items in SQLite (`database.get_all_clothes()`).
+    2. Any existing garment image files in `UPLOAD_FOLDER` (excluding `.gitkeep` and temporary `eval_` files).
+    Returns a dict with `item` and `filename` if an exact match exists, or None if unique.
+    """
+    if not image_bytes:
+        return None
+
+    candidate_hash = compute_bytes_sha256(image_bytes)
+    upload_dir = app.config["UPLOAD_FOLDER"]
+    checked_paths = set()
+
+    # 1. Check all image files referenced by existing closet items
+    for item in database.get_all_clothes():
+        img_url = item.get("image_url") or ""
+        fname = os.path.basename(img_url)
+        if not fname:
+            continue
+        existing_path = os.path.join(upload_dir, fname)
+        if os.path.isfile(existing_path):
+            checked_paths.add(os.path.abspath(existing_path))
+            try:
+                with open(existing_path, "rb") as f:
+                    existing_bytes = f.read()
+                if compute_bytes_sha256(existing_bytes) == candidate_hash and existing_bytes == image_bytes:
+                    return {"item": item, "filename": fname}
+            except OSError:
+                continue
+
+    # 2. Check any other non-temporary garment files in UPLOAD_FOLDER
+    if os.path.isdir(upload_dir):
+        for fname in os.listdir(upload_dir):
+            if fname.startswith(".") or fname.startswith("eval_") or fname.startswith("demo_"):
+                continue
+            if not allowed_file(fname):
+                continue
+            existing_path = os.path.join(upload_dir, fname)
+            abs_path = os.path.abspath(existing_path)
+            if abs_path in checked_paths or not os.path.isfile(existing_path):
+                continue
+            try:
+                with open(existing_path, "rb") as f:
+                    existing_bytes = f.read()
+                if compute_bytes_sha256(existing_bytes) == candidate_hash and existing_bytes == image_bytes:
+                    return {"item": None, "filename": fname}
+            except OSError:
+                continue
+
+    return None
 
 
 def get_active_api_key() -> Optional[str]:
@@ -189,7 +281,7 @@ def extract_json_payload(raw_text: str) -> Dict[str, Any]:
 
 def fallback_unassigned_garment() -> Dict[str, Any]:
     """
-    Issue Fix 3: Graceful Offline & Missing API Key Fallback Defaults.
+    Graceful Offline & Missing API Key Fallback Defaults.
     When the API key is missing/invalid or the vision model request throws an error,
     return safe 'Unassigned' defaults so the upload never crashes or blocks.
     """
@@ -243,7 +335,7 @@ def analyze_garment_with_gemini(
     Analyze an uploaded garment photo using Gemini 2.5 Flash Vision.
     Returns (metadata_dict, source_engine_str, fallback_used_bool).
     If API key is missing, empty, or invalid, or if the vision request throws an error,
-    returns the Issue Fix 3 Unassigned fallback defaults.
+    returns the Unassigned fallback defaults.
     """
     if not api_key or not GENAI_SDK or filepath.lower().endswith(".svg"):
         return fallback_unassigned_garment(), "fallback-unassigned", True
@@ -295,7 +387,7 @@ def analyze_garment_with_gemini(
 
 
 # ---------------------------------------------------------------------------
-# Outfit Generation & Vibe Tagging (Issue Fix 1)
+# Outfit Generation & Vibe Tagging
 # ---------------------------------------------------------------------------
 
 def generate_outfits_with_gemini(
@@ -450,7 +542,7 @@ def algorithmic_stylist_fallback(
             return []
         assigned_vibe = target_vibe or "Casual"
         return [{
-            "outfit_name": f"{assigned_vibe} Capsule Pairing",
+            "outfit_name": f"{assigned_vibe} Wardrobe Pairing",
             "vibe": assigned_vibe,
             "item_ids": all_ids[:min(4, len(all_ids))],
             "styling_notes": "Cohesive studio combination balancing the textures and color tones currently cataloged in your wardrobe."
@@ -583,7 +675,7 @@ def algorithmic_stylist_fallback(
 
 
 # ---------------------------------------------------------------------------
-# Feature 1: "Should I Buy It?" In-Store Purchase Evaluator
+# Feature 1: "Buy Less" In-Store Purchase Evaluator
 # ---------------------------------------------------------------------------
 
 def extract_color_family(color_str: str) -> str:
@@ -801,7 +893,7 @@ def fallback_evaluate_purchase(
     inventory: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    Deterministic in-store purchase evaluator when Gemini API key is not configured or fails.
+    Deterministic in-store Buy Less purchase evaluator when Gemini API key is not configured or fails.
     Compares the candidate item against the user's real closet inventory to detect duplicates,
     count viable outfit combinations, and build the top 3 visual outfits.
     """
@@ -1039,37 +1131,10 @@ def evaluate_purchase_with_gemini(
                 parsed = extract_json_payload(response.text)
                 return normalize_purchase_evaluation(parsed, inventory), f"gemini ({GEMINI_MODEL_NAME})"
         except Exception as exc:
-            app.logger.warning(f"Gemini Purchase Evaluator failed, using deterministic closet evaluator: {exc}")
+            app.logger.warning(f"Gemini Buy Less Evaluator failed, using deterministic closet evaluator: {exc}")
 
     fallback_result = fallback_evaluate_purchase(filepath, original_filename, inventory)
     return normalize_purchase_evaluation(fallback_result, inventory), "closet-evaluator-fallback"
-
-
-# ---------------------------------------------------------------------------
-# Demo Wardrobe SVG Generator (1-Click Studio Capsule Seeder)
-# ---------------------------------------------------------------------------
-
-def generate_garment_svg(title: str, subtitle: str, bg_hex: str, accent_hex: str, silhouette: str) -> str:
-    """Create a sleek editorial studio SVG illustration for demo garments."""
-    paths = {
-        "jacket": '<path d="M95 75 L145 55 L175 72 L205 55 L255 75 L295 195 L255 208 L235 125 L235 300 L115 300 L115 125 L95 208 L55 195 Z" fill="{fg}" stroke="#111" stroke-width="4" stroke-linejoin="round"/><line x1="175" y1="72" x2="175" y2="300" stroke="#111" stroke-width="4"/><rect x="130" y="195" width="32" height="38" fill="none" stroke="#111" stroke-width="3"/><rect x="188" y="195" width="32" height="38" fill="none" stroke="#111" stroke-width="3"/>',
-        "tee": '<path d="M100 75 L145 58 Q175 78 205 58 L250 75 L285 150 L240 170 L225 125 L225 295 L125 295 L125 125 L110 170 L65 150 Z" fill="{fg}" stroke="#111" stroke-width="4" stroke-linejoin="round"/>',
-        "shirt": '<path d="M100 72 L145 55 L175 75 L205 55 L250 72 L285 185 L245 195 L230 120 L230 298 L120 298 L120 120 L105 195 L65 185 Z" fill="{fg}" stroke="#111" stroke-width="4" stroke-linejoin="round"/><line x1="175" y1="75" x2="175" y2="298" stroke="#111" stroke-width="3" stroke-dasharray="6,6"/>',
-        "sweater": '<path d="M102 75 L145 60 Q175 74 205 60 L248 75 L282 215 L245 222 L230 125 L230 290 L120 290 L120 125 L105 222 L68 215 Z" fill="{fg}" stroke="#111" stroke-width="4" stroke-linejoin="round"/>',
-        "pants": '<path d="M120 55 L230 55 L248 315 L190 315 L175 145 L160 315 L102 315 Z" fill="{fg}" stroke="#111" stroke-width="4" stroke-linejoin="round"/><line x1="120" y1="78" x2="230" y2="78" stroke="#111" stroke-width="3"/>',
-        "cargo": '<path d="M115 55 L235 55 L255 315 L192 315 L175 150 L158 315 L95 315 Z" fill="{fg}" stroke="#111" stroke-width="4" stroke-linejoin="round"/><rect x="102" y="165" width="26" height="45" fill="{fg}" stroke="#111" stroke-width="3"/><rect x="222" y="165" width="26" height="45" fill="{fg}" stroke="#111" stroke-width="3"/>',
-        "shoes": '<path d="M75 215 Q95 165 145 175 L215 195 Q275 200 285 240 L285 265 L70 265 Z" fill="{fg}" stroke="#111" stroke-width="4" stroke-linejoin="round"/><rect x="68" y="262" width="220" height="18" rx="4" fill="#111"/>',
-        "belt": '<circle cx="175" cy="185" r="78" fill="none" stroke="{fg}" stroke-width="26"/><circle cx="175" cy="185" r="78" fill="none" stroke="#111" stroke-width="4"/><rect x="155" y="92" width="40" height="28" rx="4" fill="none" stroke="#111" stroke-width="5"/>',
-    }
-    art = paths.get(silhouette, paths["tee"]).format(fg=accent_hex)
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 350 420" width="100%" height="100%">
-  <rect width="350" height="420" fill="{bg_hex}"/>
-  <rect x="18" y="18" width="314" height="384" fill="none" stroke="#E2E4E8" stroke-width="1.5"/>
-  <text x="34" y="44" font-family="monospace" font-size="10" fill="#71717A" letter-spacing="1.5">ARCHIVE STUDIO // LOT</text>
-  {art}
-  <text x="34" y="366" font-family="sans-serif" font-size="13" font-weight="600" fill="#111111" letter-spacing="0.5">{title.upper()}</text>
-  <text x="34" y="384" font-family="monospace" font-size="10" fill="#6B7280">{subtitle}</text>
-</svg>"""
 
 
 # ---------------------------------------------------------------------------
@@ -1187,13 +1252,15 @@ def api_get_clothes():
 def api_upload_cloth():
     """
     POST /api/upload
-    Handle image upload (file or base64 camera capture), call Gemini 2.5 Flash Vision API,
-    save file to disk, write metadata to SQLite, and return the newly created item JSON.
-    Implements Issue Fix 3: Graceful Offline & Missing API Key Fallback.
+    Handle image upload (file or base64 camera capture), check against existing closet image files
+    to reject exact duplicate uploads, call Gemini 2.5 Flash Vision API, save file to disk,
+    write metadata to SQLite, and return the newly created item JSON.
     """
     api_key = get_active_api_key()
     saved_filename = None
     original_filename = ""
+    image_bytes: Optional[bytes] = None
+    ext = "jpg"
 
     # 1. Check standard multipart file upload
     if "image" in request.files and request.files["image"].filename:
@@ -1203,10 +1270,11 @@ def api_upload_cloth():
             return jsonify({"error": "Unsupported image file format. Use JPG, PNG, WEBP, GIF, or SVG."}), 400
 
         ext = original_filename.rsplit(".", 1)[1].lower()
+        image_bytes = file.read()
+        if not image_bytes:
+            return jsonify({"error": "Uploaded image file is empty."}), 400
         unique_name = f"garment_{uuid.uuid4().hex[:12]}.{ext}"
         saved_filename = secure_filename(unique_name)
-        filepath = os.path.join(app.config["UPLOAD_FOLDER"], saved_filename)
-        file.save(filepath)
 
     # 2. Check base64 camera capture payload
     elif request.is_json and request.json.get("image_base64"):
@@ -1218,16 +1286,34 @@ def api_upload_cloth():
             else:
                 b64_data = raw_b64
             image_bytes = base64.b64decode(b64_data)
+            if not image_bytes:
+                return jsonify({"error": "Decoded camera image is empty."}), 400
             saved_filename = f"camera_{uuid.uuid4().hex[:12]}.jpg"
-            filepath = os.path.join(app.config["UPLOAD_FOLDER"], saved_filename)
-            with open(filepath, "wb") as f:
-                f.write(image_bytes)
         except Exception as exc:
             return jsonify({"error": f"Failed to decode camera image: {exc}"}), 400
     else:
         return jsonify({"error": "No garment image provided in request."}), 400
 
-    # 3. Call Gemini Vision API (with Issue Fix 3 Unassigned fallback when key is missing or call fails)
+    # 3. Issue 3 / Feat 3: Check existing closet image files and reject exact duplicates
+    duplicate_match = find_duplicate_closet_image(image_bytes)
+    if duplicate_match is not None:
+        matched_item = duplicate_match.get("item")
+        existing_desc = (
+            f" (#{matched_item['id']} {matched_item.get('type', 'Clothing Item')})"
+            if matched_item else ""
+        )
+        return jsonify({
+            "error": f"Duplicate image rejected: this exact image file is already in your closet{existing_desc}.",
+            "duplicate": True,
+            "existing_item": matched_item,
+        }), 409
+
+    # 4. Save validated unique image to UPLOAD_FOLDER
+    filepath = os.path.join(app.config["UPLOAD_FOLDER"], saved_filename)
+    with open(filepath, "wb") as f:
+        f.write(image_bytes)
+
+    # 5. Call Gemini Vision API (with Unassigned fallback when key is missing or call fails)
     metadata, engine_used, fallback_used = analyze_garment_with_gemini(
         filepath=filepath,
         original_filename=original_filename,
@@ -1270,7 +1356,7 @@ def api_upload_cloth():
 def api_evaluate_purchase():
     """
     POST /api/evaluate-purchase
-    Feature 1: "Should I Buy It?" In-Store Evaluator.
+    Feature 1: "Buy Less" In-Store Evaluator.
     Accepts a candidate item image (multipart `image`/`file` or JSON `image_base64`)
     plus optional closet catalog JSON (defaults to current SQLite wardrobe).
     Returns structured evaluation JSON with decision, reasoning, redundancy alert,
@@ -1395,13 +1481,30 @@ def api_wear_cloth(item_id: int):
 def api_delete_cloth(item_id: int):
     """
     DELETE /api/clothes/<id>
-    Remove a clothing item from the wardrobe database.
+    Remove a clothing item from the wardrobe database and clean up its image file on disk.
     """
     existing = database.get_cloth_by_id(item_id)
     if not existing:
         return jsonify({"error": f"Clothing item #{item_id} not found."}), 404
 
+    image_url = existing.get("image_url") or ""
     database.delete_cloth(item_id)
+
+    # Remove image file from UPLOAD_FOLDER if no other item references it
+    fname = os.path.basename(image_url)
+    if fname:
+        still_referenced = any(
+            os.path.basename(it.get("image_url") or "") == fname
+            for it in database.get_all_clothes()
+        )
+        if not still_referenced:
+            filepath = os.path.join(app.config["UPLOAD_FOLDER"], fname)
+            if os.path.isfile(filepath):
+                try:
+                    os.remove(filepath)
+                except OSError:
+                    pass
+
     return jsonify({"deleted": True, "id": item_id})
 
 
@@ -1489,165 +1592,6 @@ def api_delete_outfit(outfit_id: int):
     if not deleted:
         return jsonify({"error": "Outfit not found."}), 404
     return jsonify({"deleted": True, "id": outfit_id})
-
-
-@app.route("/api/seed-demo", methods=["POST"])
-def api_seed_demo():
-    """
-    POST /api/seed-demo
-    Populate an 8-piece designer capsule wardrobe with studio SVG garment illustrations
-    using canonical categories so users can immediately test filtering, inline-editing,
-    wearing, AI outfit styling, and the 'Should I Buy It?' In-Store Evaluator.
-    """
-    today = date.today()
-    demo_pieces = [
-        {
-            "filename": "demo_work_jacket.svg",
-            "title": "Tobacco Work Jacket",
-            "subtitle": "BOXY // HEAVY DUCK CANVAS",
-            "bg": "#F4F1EA",
-            "fg": "#9A6B43",
-            "silhouette": "jacket",
-            "type": "vintage work jacket",
-            "category": "Outerwear",
-            "color": "faded tobacco brown",
-            "fit": "boxy",
-            "size": "L",
-            "description": "Heavyweight 12oz duck canvas with contrast corduroy collar, patinated brass zipper, and dual patch pockets. Vintage workwear aesthetic.",
-            "last_worn": (today - timedelta(days=5)).isoformat(),
-        },
-        {
-            "filename": "demo_ecru_tee.svg",
-            "title": "Heavyweight Boxy Tee",
-            "subtitle": "BOXY // 300GSM ORGANIC JERSEY",
-            "bg": "#F6F5F2",
-            "fg": "#EAE6DF",
-            "silhouette": "tee",
-            "type": "heavyweight crewneck tee",
-            "category": "Tops",
-            "color": "ecru",
-            "fit": "boxy",
-            "size": "M",
-            "description": "Dry-hand 300gsm combed cotton jersey with thick ribbed collar, dropped shoulders, and blind-stitched hems. Minimalist architectural base layer.",
-            "last_worn": (today - timedelta(days=2)).isoformat(),
-        },
-        {
-            "filename": "demo_poplin_shirt.svg",
-            "title": "Crisp Poplin Button-Up",
-            "subtitle": "OVERSIZED // ICE BLUE COTTON",
-            "bg": "#F2F5F8",
-            "fg": "#C5D8EB",
-            "silhouette": "shirt",
-            "type": "poplin button-up shirt",
-            "category": "Tops",
-            "color": "ice blue",
-            "fit": "oversized",
-            "size": None,
-            "description": "Crisp Italian cotton poplin with mother-of-pearl buttons, elongated cuffs, and curved shirttail hem. Effortless gallery-ready tailoring.",
-            "last_worn": None,
-        },
-        {
-            "filename": "demo_charcoal_knit.svg",
-            "title": "Charcoal Merino Crew",
-            "subtitle": "RELAXED // FINE GAUGE RIB",
-            "bg": "#F3F4F6",
-            "fg": "#4B5563",
-            "silhouette": "sweater",
-            "type": "merino wool crewneck",
-            "category": "Tops",
-            "color": "deep charcoal",
-            "fit": "relaxed",
-            "size": "L",
-            "description": "Fine-gauge extra-fine merino knit featuring saddle shoulders and articulated rib trims. Quiet luxury tonal layering piece.",
-            "last_worn": (today - timedelta(days=11)).isoformat(),
-        },
-        {
-            "filename": "demo_selvedge_jeans.svg",
-            "title": "Raw Selvedge Denim",
-            "subtitle": "STRAIGHT-LEG // 14OZ JAPANESE INDIGO",
-            "bg": "#F1F3F6",
-            "fg": "#2B3D5B",
-            "silhouette": "pants",
-            "type": "selvedge denim jeans",
-            "category": "Bottoms",
-            "color": "raw dark indigo",
-            "fit": "straight-leg",
-            "size": "32",
-            "description": "Unwashed 14oz red-line Japanese selvedge denim with classic 5-pocket construction, copper rivets, and clean full-length stack.",
-            "last_worn": (today - timedelta(days=1)).isoformat(),
-        },
-        {
-            "filename": "demo_olive_cargos.svg",
-            "title": "Ripstop Fatigue Pants",
-            "subtitle": "WIDE-LEG // OLIVE DRAB",
-            "bg": "#F2F4F0",
-            "fg": "#5A6650",
-            "silhouette": "cargo",
-            "type": "utility cargo trousers",
-            "category": "Bottoms",
-            "color": "olive drab",
-            "fit": "wide-leg",
-            "size": None,
-            "description": "Military-inspired cotton ripstop fatigue trousers with bellowed side pockets, knee pleats, and drawstring hem toggles.",
-            "last_worn": None,
-        },
-        {
-            "filename": "demo_penny_loafers.svg",
-            "title": "Lug-Sole Penny Loafers",
-            "subtitle": "STRUCTURED // ESPRESSO CALFSKIN",
-            "bg": "#F5F4F2",
-            "fg": "#272320",
-            "silhouette": "shoes",
-            "type": "leather penny loafers",
-            "category": "Footwear",
-            "color": "espresso black",
-            "fit": "structured",
-            "size": "42",
-            "description": "Polished full-grain calfskin penny loafers set on a chunky Goodyear-welted commando lug sole. Bridges formal tailoring and streetwear.",
-            "last_worn": (today - timedelta(days=4)).isoformat(),
-        },
-        {
-            "filename": "demo_leather_belt.svg",
-            "title": "Bridle Leather Belt",
-            "subtitle": "ONE-SIZE // BRUSHED SILVER BUCKLE",
-            "bg": "#F6F6F5",
-            "fg": "#1F1F1F",
-            "silhouette": "belt",
-            "type": "minimalist leather belt",
-            "category": "Accessories",
-            "color": "matte black",
-            "fit": "slim",
-            "size": None,
-            "description": "Vegetable-tanned bridle leather strap with beveled edges and architectural brushed nickel frame buckle.",
-            "last_worn": None,
-        },
-    ]
-
-    created_items = []
-    for piece in demo_pieces:
-        svg_markup = generate_garment_svg(
-            piece["title"], piece["subtitle"], piece["bg"], piece["fg"], piece["silhouette"]
-        )
-        filepath = os.path.join(app.config["UPLOAD_FOLDER"], piece["filename"])
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(svg_markup)
-
-        item = database.insert_cloth(
-            image_url=f"/uploads/{piece['filename']}",
-            garment_type=piece["type"],
-            category=piece["category"],
-            color=piece["color"],
-            fit=piece["fit"],
-            size=piece["size"],
-            description=piece["description"],
-            last_worn=piece["last_worn"],
-        )
-        created_items.append(item)
-
-    return jsonify({
-        "items": created_items,
-        "message": f"Loaded {len(created_items)} archival capsule pieces into your wardrobe."
-    }), 201
 
 
 if __name__ == "__main__":

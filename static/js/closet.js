@@ -329,7 +329,7 @@ function escapeHtml(str) {
 }
 
 /**
- * Issue Fix 2: Standardized Category Dropdown in Edit Mode (Inline & Modal).
+ * Standardized Category Dropdown in Edit Mode (Inline & Modal).
  * When editing `category` inline, renders a controlled <select> restricted to
  * the 6 canonical system categories instead of a freeform text input.
  */
@@ -461,7 +461,7 @@ async function markWornToday(itemId) {
 }
 
 /**
- * Issue Fix 2 & 3: Open Edit Modal with controlled canonical category <select>
+ * Open Edit Modal with controlled canonical category <select>
  * and clean handling of "Unassigned" fallback values.
  */
 function openEditModal(itemId) {
@@ -612,7 +612,7 @@ function captureCameraFrame() {
 }
 
 /**
- * Issue Fix 3: Upload handler with non-blocking fallback notice when AI tagging is unavailable.
+ * Upload handler with duplicate rejection handling and non-blocking fallback notice when AI tagging is unavailable.
  */
 async function handleUploadSubmit(e) {
   e.preventDefault();
@@ -681,7 +681,7 @@ function resetUploadForm() {
 }
 
 // =========================================================================
-// Feature 1: "Should I Buy It?" In-Store Evaluator Logic
+// Feature 1: "Buy Less" In-Store Evaluator Logic
 // =========================================================================
 
 async function switchEvalMode(mode) {
@@ -730,7 +730,7 @@ function captureEvalCameraFrame() {
   const previewContainer = document.getElementById("evalPreviewContainer");
   const previewImg = document.getElementById("evalImagePreview");
   previewImg.src = state.evalCapturedBase64;
-  previewContainer.style.display = "block";
+  previewContainer.style.display = "flex";
   stopEvalCameraStream();
   document.getElementById("evalCameraArea").style.display = "none";
 }
@@ -779,7 +779,7 @@ async function handleEvaluatorSubmit(e) {
 
   const originalBtnHtml = submitBtn.innerHTML;
   submitBtn.disabled = true;
-  submitBtn.innerHTML = `<span class="spinner"></span> Evaluating Against Closet...`;
+  submitBtn.innerHTML = `<span class="spinner"></span> Running Buy Less Check...`;
 
   try {
     const res = await fetch("/api/evaluate-purchase", fetchOptions);
@@ -787,7 +787,7 @@ async function handleEvaluatorSubmit(e) {
     if (!res.ok) throw new Error(data.error || "Purchase evaluation failed");
 
     renderEvaluationResults(data);
-    showToast(`Verdict: ${data.decision} — ${data.total_outfit_count} outfit combinations found.`);
+    showToast(`Buy Less Verdict: ${data.decision} — ${data.total_outfit_count} outfit combinations found.`);
   } catch (err) {
     showToast(err.message, "error");
   } finally {
@@ -867,7 +867,7 @@ function renderEvaluationResults(data) {
   const topOutfits = Array.isArray(data.top_outfits) ? data.top_outfits.slice(0, 3) : [];
   if (topOutfits.length === 0) {
     outfitsGrid.innerHTML = `
-      <div style="grid-column: 1 / -1; padding: 16px; background: var(--bg-canvas); border-radius: var(--radius-sm); font-size: 0.82rem; color: var(--text-secondary);">
+      <div class="eval-empty-outfits">
         Add more garments to your closet catalog to preview complete outfit pairings with this candidate piece.
       </div>
     `;
@@ -880,9 +880,9 @@ function renderEvaluationResults(data) {
 
       const candidateTileHtml = candidateThumbSrc
         ? `
-          <div class="eval-thumb-tile" title="Candidate: ${escapeHtml(cand.color || '')} ${escapeHtml(cand.category || '')}">
+          <div class="eval-thumb-tile is-candidate" title="Candidate: ${escapeHtml(cand.color || '')} ${escapeHtml(cand.category || '')}">
             <img src="${escapeHtml(candidateThumbSrc)}" alt="Candidate Item" />
-            <div class="eval-thumb-caption">★ NEW (${escapeHtml(cand.category || "Piece")})</div>
+            <div class="eval-thumb-caption candidate-caption">★ NEW (${escapeHtml(cand.category || "Piece")})</div>
           </div>
         `
         : "";
@@ -898,11 +898,16 @@ function renderEvaluationResults(data) {
         )
         .join("");
 
+      const pieceCount = (candidateThumbSrc ? 1 : 0) + matchedItems.length;
+
       const card = document.createElement("div");
       card.className = "eval-outfit-card";
       card.innerHTML = `
         <div class="eval-outfit-header">
-          <div class="eval-outfit-vibe">TOP LOOK 0${idx + 1} // ${escapeHtml(outfit.vibe || "Casual")}</div>
+          <div class="eval-outfit-header-top">
+            <span class="eval-outfit-vibe">LOOK 0${idx + 1} // ${escapeHtml(outfit.vibe || "Casual")}</span>
+            <span class="eval-outfit-count-pill">${pieceCount} pcs</span>
+          </div>
           <div class="eval-outfit-title">"${escapeHtml(outfit.title || `Styled Combo #${idx + 1}`)}"</div>
         </div>
         <div class="eval-outfit-thumbs">
@@ -910,7 +915,8 @@ function renderEvaluationResults(data) {
           ${existingTilesHtml}
         </div>
         <div class="eval-outfit-tips">
-          ${escapeHtml(outfit.styling_tips || "")}
+          <span class="eval-tips-label">Styling Note</span>
+          <p>${escapeHtml(outfit.styling_tips || "")}</p>
         </div>
       `;
       outfitsGrid.appendChild(card);
@@ -918,25 +924,7 @@ function renderEvaluationResults(data) {
   }
 
   resultsSec.style.display = "flex";
-}
-
-async function seedDemoCapsule() {
-  const btn = document.getElementById("btnSeedDemo");
-  if (btn) btn.disabled = true;
-  try {
-    const res = await fetch("/api/seed-demo", {
-      method: "POST",
-      headers: getApiHeaders(true),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to seed studio capsule");
-    showToast(data.message);
-    await fetchWardrobe();
-  } catch (err) {
-    showToast(err.message, "error");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
+  resultsSec.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function closeModal(modalId) {
@@ -1001,7 +989,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("btnOpenUpload")?.addEventListener("click", openUpload);
   document.getElementById("btnEmptyUpload")?.addEventListener("click", openUpload);
 
-  // In-Store Purchase Evaluator Modal Triggers (Feature 1)
+  // Buy Less In-Store Purchase Evaluator Modal Triggers (Feature 1)
   const openEvaluator = () => {
     resetEvaluatorForm();
     switchEvalMode("file");
@@ -1009,9 +997,6 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   document.getElementById("btnOpenEvaluator")?.addEventListener("click", openEvaluator);
   document.getElementById("btnBannerEvaluator")?.addEventListener("click", openEvaluator);
-
-  document.getElementById("btnSeedDemo")?.addEventListener("click", seedDemoCapsule);
-  document.getElementById("btnEmptySeed")?.addEventListener("click", seedDemoCapsule);
 
   // Upload Mode & Dropzone Listeners
   document.getElementById("tabFileMode")?.addEventListener("click", () => switchUploadMode("file"));
@@ -1052,7 +1037,7 @@ document.addEventListener("DOMContentLoaded", () => {
     reader.readAsDataURL(file);
   }
 
-  // Evaluator Mode & Dropzone Listeners (Feature 1)
+  // Buy Less Evaluator Mode & Dropzone Listeners (Feature 1)
   document.getElementById("evalTabFileMode")?.addEventListener("click", () => switchEvalMode("file"));
   document.getElementById("evalTabCameraMode")?.addEventListener("click", () => switchEvalMode("camera"));
   document.getElementById("btnEvalCapturePhoto")?.addEventListener("click", captureEvalCameraFrame);
@@ -1087,7 +1072,7 @@ document.addEventListener("DOMContentLoaded", () => {
     reader.onload = (ev) => {
       state.evalPreviewDataUrl = ev.target.result;
       document.getElementById("evalImagePreview").src = ev.target.result;
-      document.getElementById("evalPreviewContainer").style.display = "block";
+      document.getElementById("evalPreviewContainer").style.display = "flex";
     };
     reader.readAsDataURL(file);
   }
