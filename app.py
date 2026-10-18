@@ -14,9 +14,17 @@ from flask import (
     render_template,
     send_from_directory,
 )
+from jinja2 import ChoiceLoader, FileSystemLoader
 from werkzeug.utils import secure_filename
 
 import database
+
+# Optional PIL import for dominant color inspection in offline purchase evaluator
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 # Attempt to import modern google-genai SDK first, with fallback to google-generativeai
 GENAI_SDK = None
@@ -42,7 +50,13 @@ app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB upload limit
 
-# Ensure SQLite tables exist at startup
+# Support both standard `templates/` directory and flat single-folder layout
+app.jinja_loader = ChoiceLoader([
+    FileSystemLoader(os.path.join(BASE_DIR, "templates")),
+    FileSystemLoader(BASE_DIR),
+])
+
+# Ensure SQLite tables exist and legacy records are normalized at startup
 database.init_db()
 
 # ---------------------------------------------------------------------------
@@ -52,36 +66,82 @@ database.init_db()
 VISION_SYSTEM_PROMPT = """You are a precise fashion archivist and garment analyzer. 
 Analyze the provided clothing image and extract its properties into a strict JSON object. 
 Never hallucinate exact sizing (set size to null). Be specific with color nuances and silhouettes.
+The category MUST be one of the canonical categories:
+"Tops", "Bottoms", "Outerwear", "Footwear", "Accessories", or "One-Piece / Dresses".
 
 Output JSON Format:
 {
-  "type": "string (e.g., jeans, button-up, hoodie, crewneck, sweatpants, bomber jacket, trench coat, sneakers, loafers, etc.)",
-  "category": "string (tops | bottoms | outerwear | footwear | accessories)",
+  "name": "string (e.g., jeans, button-up, hoodie, crewneck, sweatpants, bomber jacket, trench coat, sneakers, loafers, midi dress, etc.)",
+  "type": "string (same as name)",
+  "category": "string (Tops | Bottoms | Outerwear | Footwear | Accessories | One-Piece / Dresses)",
   "color": "string (e.g., light blue wash, deep navy, maroon, olive drab, charcoal, ecru)",
   "fit": "string (e.g., oversized, boxy, relaxed, slim, skinny, straight-leg, cropped)",
   "size": null,
-  "description": "string (Details on specific textures, graphics, branding, distressing, hardware, collars, stitching, or distinct aesthetic vibes like vintage workwear, streetwear, grunge, minimalist, preppy)"
+  "style_notes": "string (Details on specific textures, graphics, branding, distressing, hardware, collars, stitching, or distinct aesthetic vibes like vintage workwear, streetwear, grunge, minimalist, preppy)",
+  "description": "string (same as style_notes)"
 }"""
 
 STYLIST_SYSTEM_PROMPT = """You are an avant-garde personal wardrobe stylist and sustainability advocate. 
-Given a user's closet inventory (list of garment objects with IDs), your job is to build as many practical, aesthetically cohesive outfits as possible.
+Given a user's closet inventory (list of garment objects with IDs), your job is to build practical, aesthetically cohesive outfits.
 
 Guidelines:
 1. Every outfit MUST consist of at least:
-   - 1 Top + 1 Bottom (or 1 full-body piece like a dress/jumpsuit)
+   - 1 Top + 1 Bottom (or 1 full-body piece from "One-Piece / Dresses")
    - Optional: Outerwear (jackets, coats), Footwear, and Accessories if available in the closet.
 2. Ensure silhouette harmony (e.g., pairing slim tops with baggy pants, or balanced boxy proportions).
 3. Ensure color coordination (monochromatic, complementary, earth tones, tonal matching).
 4. Do not reuse the exact same combination of top + bottom across multiple outfits unless layered distinctly.
 5. Provide a witty, creative title for each outfit.
+6. Every outfit MUST include an explicit `vibe` tag matching one of the standardized styling options:
+   "Streetwear", "Casual", "Smart Casual", "Minimalist", "Formal", "Athleisure", "Workwear", or "Layered".
 
 Output JSON Format:
 {
   "outfits": [
     {
       "outfit_name": "string (creative, memorable outfit name)",
+      "vibe": "string (Streetwear | Casual | Smart Casual | Minimalist | Formal | Athleisure | Workwear | Layered)",
       "item_ids": [101, 104, 112],
       "styling_notes": "string (1-2 sentences on why this works and how to wear it)"
+    }
+  ]
+}"""
+
+PURCHASE_EVALUATOR_SYSTEM_PROMPT = """You are an expert personal wardrobe strategist and smart shopping advisor.
+A user is in-store considering buying a candidate clothing item (shown in the attached image).
+You are given the candidate item image and the user's current closet catalog (JSON list of owned garments).
+
+Your task:
+1. Extract metadata for the candidate item:
+   - `category`: Must be one of "Tops", "Bottoms", "Outerwear", "Footwear", "Accessories", or "One-Piece / Dresses"
+   - `color`: Specific color nuance (e.g., "olive green", "washed black", "ecru")
+   - `fit`: Silhouette/cut (e.g., "relaxed", "oversized", "boxy", "straight-leg", "tailored")
+   - `aesthetic`: Style direction (e.g., "military utility", "minimalist tailoring", "vintage streetwear")
+2. Compare the candidate item with the user's current closet catalog:
+   - **Redundancy / Overlap:** Check if the candidate item is too similar in category, color, and vibe to already-owned pieces (e.g., "You already own 2 black oversized bomber jackets").
+   - **Versatility:** Calculate how many viable complete outfits (`total_outfit_count`) this piece can form with the user's current closet items.
+   - **Decision:** Recommend `"BUY"` if high versatility and low redundancy, `"THINK TWICE"` if moderate overlap or niche styling utility, or `"PASS"` if redundant or incompatible with the current closet.
+3. Build the **Top 3 Outfits** (`top_outfits`) combining this candidate piece with specific existing items from the user's catalog (referencing their IDs formatted as `"item_<id>"`, e.g., `"item_12"`).
+
+Return ONLY a strict JSON object matching this exact schema:
+{
+  "candidate_item": {
+    "category": "Outerwear",
+    "color": "olive green",
+    "fit": "relaxed",
+    "aesthetic": "military utility"
+  },
+  "decision": "BUY",
+  "decision_summary": "Versatile layering piece that pairs with 70% of your bottoms and fills an outerwear gap.",
+  "is_redundant": false,
+  "redundancy_notes": null,
+  "total_outfit_count": 8,
+  "top_outfits": [
+    {
+      "title": "Casual Utility Fall",
+      "vibe": "Streetwear",
+      "existing_item_ids": ["item_12", "item_45"],
+      "styling_tips": "Pair with your straight-leg light denim and cream crewneck."
     }
   ]
 }"""
@@ -98,13 +158,15 @@ def allowed_file(filename: str) -> bool:
 def get_active_api_key() -> Optional[str]:
     """Retrieve Gemini API key from request header or environment variables."""
     header_key = request.headers.get("X-Gemini-Api-Key", "").strip()
-    if header_key:
+    if header_key and header_key.lower() not in ("null", "none", "undefined"):
         return header_key
     env_key = (
         os.environ.get("GEMINI_API_KEY", "").strip()
         or os.environ.get("GOOGLE_API_KEY", "").strip()
     )
-    return env_key if env_key else None
+    if env_key and env_key.lower() not in ("null", "none", "undefined"):
+        return env_key
+    return None
 
 
 def extract_json_payload(raw_text: str) -> Dict[str, Any]:
@@ -125,161 +187,125 @@ def extract_json_payload(raw_text: str) -> Dict[str, Any]:
         raise
 
 
+def fallback_unassigned_garment() -> Dict[str, Any]:
+    """
+    Issue Fix 3: Graceful Offline & Missing API Key Fallback Defaults.
+    When the API key is missing/invalid or the vision model request throws an error,
+    return safe 'Unassigned' defaults so the upload never crashes or blocks.
+    """
+    return {
+        "name": "Clothing Item",
+        "type": "Clothing Item",
+        "category": "Unassigned",
+        "color": "Unassigned",
+        "fit": "Unassigned",
+        "size": None,
+        "style_notes": "Unassigned",
+        "description": "Unassigned",
+    }
+
+
+def normalize_garment_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure all required keys exist and adhere to the canonical category schema."""
+    raw_cat = data.get("category")
+    category = database.normalize_category(str(raw_cat) if raw_cat else "Unassigned", default="Unassigned")
+
+    garment_name = str(data.get("name") or data.get("type") or "Clothing Item").strip()
+    style_notes = str(
+        data.get("style_notes")
+        or data.get("description")
+        or "Unassigned"
+    ).strip()
+    color = str(data.get("color") or "Unassigned").strip()
+    fit = str(data.get("fit") or "Unassigned").strip()
+    size_val = data.get("size")
+    if size_val is not None and str(size_val).strip().lower() in ("null", "none", ""):
+        size_val = None
+
+    return {
+        "name": garment_name,
+        "type": garment_name,
+        "category": category,
+        "color": color,
+        "fit": fit,
+        "size": size_val,
+        "style_notes": style_notes,
+        "description": style_notes,
+    }
+
+
 def analyze_garment_with_gemini(
     filepath: str,
     original_filename: str = "",
     api_key: Optional[str] = None
-) -> Tuple[Dict[str, Any], str]:
+) -> Tuple[Dict[str, Any], str, bool]:
     """
     Analyze an uploaded garment photo using Gemini 2.5 Flash Vision.
-    Returns (metadata_dict, source_engine_str).
-    Falls back to intelligent visual/filename heuristic if no API key is configured.
+    Returns (metadata_dict, source_engine_str, fallback_used_bool).
+    If API key is missing, empty, or invalid, or if the vision request throws an error,
+    returns the Issue Fix 3 Unassigned fallback defaults.
     """
+    if not api_key or not GENAI_SDK or filepath.lower().endswith(".svg"):
+        return fallback_unassigned_garment(), "fallback-unassigned", True
+
     mime_type, _ = mimetypes.guess_type(filepath)
     if not mime_type or mime_type == "image/svg+xml":
         mime_type = "image/jpeg"
 
-    if api_key and GENAI_SDK and not filepath.lower().endswith(".svg"):
-        try:
-            with open(filepath, "rb") as f:
-                image_bytes = f.read()
+    try:
+        with open(filepath, "rb") as f:
+            image_bytes = f.read()
 
-            if GENAI_SDK == "google-genai":
-                client = genai.Client(api_key=api_key)
-                response = client.models.generate_content(
-                    model=GEMINI_MODEL_NAME,
-                    contents=[
-                        genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                        "Analyze this garment image and return the strict JSON metadata object."
-                    ],
-                    config=genai_types.GenerateContentConfig(
-                        system_instruction=VISION_SYSTEM_PROMPT,
-                        response_mime_type="application/json",
-                        temperature=0.2,
-                    ),
-                )
-                parsed = extract_json_payload(response.text)
-                return normalize_garment_metadata(parsed), f"gemini ({GEMINI_MODEL_NAME})"
-
-            elif GENAI_SDK == "google-generativeai":
-                legacy_genai.configure(api_key=api_key)
-                model = legacy_genai.GenerativeModel(
-                    model_name=GEMINI_MODEL_NAME,
+        if GENAI_SDK == "google-genai":
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL_NAME,
+                contents=[
+                    genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                    "Analyze this garment image and return the strict JSON metadata object."
+                ],
+                config=genai_types.GenerateContentConfig(
                     system_instruction=VISION_SYSTEM_PROMPT,
-                    generation_config={"response_mime_type": "application/json", "temperature": 0.2},
-                )
-                response = model.generate_content(
-                    [
-                        {"mime_type": mime_type, "data": image_bytes},
-                        "Analyze this garment image and return the strict JSON metadata object."
-                    ]
-                )
-                parsed = extract_json_payload(response.text)
-                return normalize_garment_metadata(parsed), f"gemini ({GEMINI_MODEL_NAME})"
-        except Exception as exc:
-            app.logger.warning(f"Gemini Vision API call failed, using fallback analyzer: {exc}")
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                ),
+            )
+            parsed = extract_json_payload(response.text)
+            return normalize_garment_metadata(parsed), f"gemini ({GEMINI_MODEL_NAME})", False
 
-    return fallback_garment_analyzer(filepath, original_filename), "heuristic-fallback"
+        elif GENAI_SDK == "google-generativeai":
+            legacy_genai.configure(api_key=api_key)
+            model = legacy_genai.GenerativeModel(
+                model_name=GEMINI_MODEL_NAME,
+                system_instruction=VISION_SYSTEM_PROMPT,
+                generation_config={"response_mime_type": "application/json", "temperature": 0.2},
+            )
+            response = model.generate_content(
+                [
+                    {"mime_type": mime_type, "data": image_bytes},
+                    "Analyze this garment image and return the strict JSON metadata object."
+                ]
+            )
+            parsed = extract_json_payload(response.text)
+            return normalize_garment_metadata(parsed), f"gemini ({GEMINI_MODEL_NAME})", False
+    except Exception as exc:
+        app.logger.warning(f"Gemini Vision API call failed, using Unassigned fallback defaults: {exc}")
 
-
-def normalize_garment_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Ensure all required keys exist and adhere to the schema."""
-    category = str(data.get("category") or "tops").strip().lower()
-    if category not in {"tops", "bottoms", "outerwear", "footwear", "accessories"}:
-        if any(w in category for w in ["pant", "bottom", "jean", "trouser", "short", "skirt"]):
-            category = "bottoms"
-        elif any(w in category for w in ["outer", "jacket", "coat", "blazer"]):
-            category = "outerwear"
-        elif any(w in category for w in ["shoe", "foot", "boot", "sneaker", "loafer"]):
-            category = "footwear"
-        elif any(w in category for w in ["access", "bag", "belt", "hat", "cap", "scarf"]):
-            category = "accessories"
-        else:
-            category = "tops"
-
-    return {
-        "type": str(data.get("type") or "archive garment").strip().lower(),
-        "category": category,
-        "color": str(data.get("color") or "charcoal neutral").strip().lower(),
-        "fit": str(data.get("fit") or "relaxed").strip().lower(),
-        "size": None,
-        "description": str(
-            data.get("description")
-            or "Clean architectural construction with tonal stitching and versatile everyday drape."
-        ).strip(),
-    }
+    return fallback_unassigned_garment(), "fallback-unassigned", True
 
 
-def fallback_garment_analyzer(filepath: str, original_filename: str = "") -> Dict[str, Any]:
-    """Smart filename & dominant-color heuristic fallback when Gemini API key is absent."""
-    hint = (original_filename or os.path.basename(filepath)).lower()
-    name_stem = os.path.splitext(hint)[0].replace("_", " ").replace("-", " ")
-
-    category = "tops"
-    g_type = "heavyweight tee"
-    fit = "relaxed"
-    color = "washed charcoal"
-    desc = "Minimalist studio garment with clean tonal seaming, structured drape, and contemporary proportions."
-
-    if any(k in name_stem for k in ["jean", "denim", "pant", "trouser", "cargo", "chino", "short", "sweatpant", "skirt"]):
-        category = "bottoms"
-        g_type = next((k for k in ["jeans", "cargo pants", "trousers", "chinos", "shorts", "sweatpants", "skirt"] if k[:4] in name_stem), "wide-leg trousers")
-        fit = "straight-leg"
-        color = "raw indigo" if "jean" in name_stem or "denim" in name_stem else "deep charcoal"
-        desc = "Structured lower-body silhouette featuring reinforced pocket detailing and balanced full-length drape."
-    elif any(k in name_stem for k in ["jacket", "coat", "trench", "bomber", "blazer", "parka", "cardigan", "overshirt"]):
-        category = "outerwear"
-        g_type = next((k for k in ["bomber jacket", "trench coat", "work jacket", "blazer", "cardigan", "overshirt"] if k.split()[0] in name_stem), "boxy work jacket")
-        fit = "boxy"
-        color = "faded tobacco brown"
-        desc = "Architectural outer layer with tactile twill weave, structured collar, and utility hardware."
-    elif any(k in name_stem for k in ["shoe", "sneaker", "loafer", "boot", "derby", "mule", "runner"]):
-        category = "footwear"
-        g_type = next((k for k in ["loafers", "sneakers", "leather boots", "derbies"] if k[:4] in name_stem), "leather loafers")
-        fit = "structured"
-        color = "espresso black"
-        desc = "Grounded footwear silhouette with welted sole construction and subtle matte finish."
-    elif any(k in name_stem for k in ["belt", "bag", "tote", "cap", "hat", "beanie", "scarf", "glasses"]):
-        category = "accessories"
-        g_type = next((k for k in ["leather belt", "canvas tote", "wool beanie", "baseball cap", "scarf"] if k.split()[-1] in name_stem), "minimalist accessory")
-        fit = "one-size"
-        color = "matte black"
-        desc = "Refined finishing accent crafted to anchor monochromatic and layered ensembles."
-    elif any(k in name_stem for k in ["hoodie", "crewneck", "sweater", "shirt", "button", "polo", "tank", "tee"]):
-        category = "tops"
-        if "hoodie" in name_stem:
-            g_type, fit = "heavyweight hoodie", "oversized"
-        elif "crew" in name_stem or "sweater" in name_stem:
-            g_type, fit = "merino crewneck sweater", "relaxed"
-        elif "shirt" in name_stem or "button" in name_stem:
-            g_type, fit = "poplin button-up shirt", "oversized"
-        else:
-            g_type, fit = "boxy heavyweight tee", "boxy"
-        color = "ecru"
-
-    for c_word in ["black", "white", "ecru", "cream", "navy", "indigo", "blue", "olive", "green", "brown", "tan", "khaki", "grey", "gray", "charcoal", "maroon", "burgundy"]:
-        if c_word in name_stem:
-            color = c_word
-            break
-
-    return {
-        "type": g_type,
-        "category": category,
-        "color": color,
-        "fit": fit,
-        "size": None,
-        "description": desc,
-    }
-
+# ---------------------------------------------------------------------------
+# Outfit Generation & Vibe Tagging (Issue Fix 1)
+# ---------------------------------------------------------------------------
 
 def generate_outfits_with_gemini(
     inventory: List[Dict[str, Any]],
-    vibe: str = "Editorial Mix",
+    vibe: str = "All",
     api_key: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     Send the user's wardrobe catalog JSON to Gemini 2.5 Flash to synthesize cohesive outfits.
-    Returns (list_of_outfit_dicts, engine_used).
+    Every outfit includes an explicit standardized `vibe` tag.
     """
     compact_inventory = [
         {
@@ -293,17 +319,26 @@ def generate_outfits_with_gemini(
         for item in inventory
     ]
 
-    vibe_instruction = (
-        f"\nRequested Styling Direction / Vibe: {vibe}. "
-        "Tailor the outfit combinations, layering choices, and titles toward this aesthetic while staying faithful to the items available."
-        if vibe and vibe.lower() not in ("all", "editorial mix")
-        else "\nCreate a versatile range of high-taste editorial outfits across different moods."
-    )
+    is_specific_vibe = bool(vibe and vibe.strip().lower() not in ("all", "editorial mix"))
+    normalized_requested_vibe = database.normalize_vibe(vibe, default="Casual") if is_specific_vibe else None
+
+    if is_specific_vibe:
+        vibe_instruction = (
+            f"\nRequested Styling Direction / Vibe: {normalized_requested_vibe}. "
+            f"Tailor the outfit combinations, layering choices, and titles toward '{normalized_requested_vibe}' "
+            f"and set `vibe` to '{normalized_requested_vibe}' (or closely matching standardized vibes if generating variety)."
+        )
+    else:
+        vibe_instruction = (
+            "\nCreate a versatile range of 4 to 6 outfits across distinct standardized vibes "
+            "(such as 'Streetwear', 'Casual', 'Smart Casual', 'Minimalist', 'Formal', 'Athleisure'). "
+            "Ensure each outfit object has its own explicit `vibe` field set to one of those standardized options."
+        )
 
     user_prompt = (
         f"Closet Inventory JSON:\n{json.dumps(compact_inventory, indent=2)}\n"
         f"{vibe_instruction}\n"
-        "Generate between 3 and 6 distinct, cohesive outfits in the exact output JSON schema."
+        "Generate between 4 and 6 distinct, cohesive outfits in the exact output JSON schema."
     )
 
     if api_key and GENAI_SDK:
@@ -320,7 +355,9 @@ def generate_outfits_with_gemini(
                     ),
                 )
                 parsed = extract_json_payload(response.text)
-                outfits = validate_generated_outfits(parsed.get("outfits", []), inventory)
+                outfits = validate_generated_outfits(
+                    parsed.get("outfits", []), inventory, default_vibe=normalized_requested_vibe
+                )
                 if outfits:
                     return outfits, f"gemini ({GEMINI_MODEL_NAME})"
 
@@ -333,7 +370,9 @@ def generate_outfits_with_gemini(
                 )
                 response = model.generate_content(user_prompt)
                 parsed = extract_json_payload(response.text)
-                outfits = validate_generated_outfits(parsed.get("outfits", []), inventory)
+                outfits = validate_generated_outfits(
+                    parsed.get("outfits", []), inventory, default_vibe=normalized_requested_vibe
+                )
                 if outfits:
                     return outfits, f"gemini ({GEMINI_MODEL_NAME})"
         except Exception as exc:
@@ -344,70 +383,96 @@ def generate_outfits_with_gemini(
 
 def validate_generated_outfits(
     raw_outfits: List[Dict[str, Any]],
-    inventory: List[Dict[str, Any]]
+    inventory: List[Dict[str, Any]],
+    default_vibe: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Filter out invalid item IDs and ensure each outfit has at least 2 valid pieces."""
+    """Filter out invalid item IDs and ensure each outfit has at least 2 valid pieces and a standardized vibe."""
     valid_ids = {item["id"] for item in inventory}
     cleaned = []
-    for o in raw_outfits:
+    for idx, o in enumerate(raw_outfits):
         if not isinstance(o, dict):
             continue
         ids = []
-        for i in o.get("item_ids", []):
+        for raw_id in o.get("item_ids", []):
             try:
-                num_id = int(i)
+                if isinstance(raw_id, str) and raw_id.startswith("item_"):
+                    raw_id = raw_id.replace("item_", "")
+                num_id = int(raw_id)
                 if num_id in valid_ids and num_id not in ids:
                     ids.append(num_id)
             except (ValueError, TypeError):
                 continue
         if len(ids) >= 2:
+            outfit_name = str(o.get("outfit_name") or "Curated Archival Look").strip()
+            styling_notes = str(
+                o.get("styling_notes")
+                or "Balanced silhouette proportions pairing complementary textures and grounded tonal hues."
+            ).strip()
+            raw_vibe = o.get("vibe")
+            if raw_vibe and str(raw_vibe).strip().lower() not in ("all", "editorial mix"):
+                vibe_tag = database.normalize_vibe(str(raw_vibe), default=default_vibe or "Casual")
+            elif default_vibe:
+                vibe_tag = default_vibe
+            else:
+                vibe_tag = database.infer_vibe_from_outfit_text(outfit_name, styling_notes, idx)
+
             cleaned.append({
-                "outfit_name": str(o.get("outfit_name") or "Curated Archival Look").strip(),
+                "outfit_name": outfit_name,
+                "vibe": vibe_tag,
                 "item_ids": ids,
-                "styling_notes": str(
-                    o.get("styling_notes")
-                    or "Balanced silhouette proportions pairing complementary textures and grounded tonal hues."
-                ).strip(),
+                "styling_notes": styling_notes,
             })
     return cleaned
 
 
 def algorithmic_stylist_fallback(
     inventory: List[Dict[str, Any]],
-    vibe: str = "Editorial Mix"
+    vibe: str = "All"
 ) -> List[Dict[str, Any]]:
     """
     Deterministic editorial stylist engine when Gemini API key is not configured.
-    Pairs tops + bottoms + optional outerwear, footwear, and accessories with rich styling notes.
+    Pairs tops + bottoms (or one-piece dresses) + optional outerwear, footwear, and accessories,
+    tagging every outfit with an explicit standardized vibe.
     """
-    tops = [i for i in inventory if i["category"] == "tops"]
-    bottoms = [i for i in inventory if i["category"] == "bottoms"]
-    outerwear = [i for i in inventory if i["category"] == "outerwear"]
-    footwear = [i for i in inventory if i["category"] == "footwear"]
-    accessories = [i for i in inventory if i["category"] == "accessories"]
+    tops = [i for i in inventory if database.normalize_category(i.get("category")) == "Tops"]
+    bottoms = [i for i in inventory if database.normalize_category(i.get("category")) == "Bottoms"]
+    one_pieces = [i for i in inventory if database.normalize_category(i.get("category")) == "One-Piece / Dresses"]
+    outerwear = [i for i in inventory if database.normalize_category(i.get("category")) == "Outerwear"]
+    footwear = [i for i in inventory if database.normalize_category(i.get("category")) == "Footwear"]
+    accessories = [i for i in inventory if database.normalize_category(i.get("category")) == "Accessories"]
 
-    if not tops or not bottoms:
+    is_specific_vibe = bool(vibe and vibe.strip().lower() not in ("all", "editorial mix"))
+    target_vibe = database.normalize_vibe(vibe, default="Casual") if is_specific_vibe else None
+
+    if (not tops or not bottoms) and not one_pieces:
         all_ids = [i["id"] for i in inventory]
         if len(all_ids) < 2:
             return []
+        assigned_vibe = target_vibe or "Casual"
         return [{
-            "outfit_name": f"{vibe} Capsule Pairing",
+            "outfit_name": f"{assigned_vibe} Capsule Pairing",
+            "vibe": assigned_vibe,
             "item_ids": all_ids[:min(4, len(all_ids))],
             "styling_notes": "Cohesive studio combination balancing the textures and color tones currently cataloged in your wardrobe."
         }]
 
-    creative_titles = {
-        "Editorial Mix": [
-            "Downtown Monochrome Slouch",
-            "Sunday Art-Walk Layering",
-            "Gallery Opening Utilitarian",
-            "Off-Duty Architectural Ease",
-        ],
-        "Minimalist": [
-            "Tonal Brutalist Uniform",
-            "Nordic Gallery Proportions",
-            "Clean-Line Monolith Study",
-            "Quiet Luxury Silhouettes",
+    vibe_profiles = [
+        ("Streetwear", "Concrete Volume & Proportion"),
+        ("Casual", "Coffee Run Relaxed Drape"),
+        ("Smart Casual", "Gallery Opening Elevated Mix"),
+        ("Minimalist", "Tonal Brutalist Uniform"),
+        ("Formal", "Refined Sartorial Contrast"),
+        ("Athleisure", "Off-Duty Lounge Rotation"),
+        ("Workwear", "Heritage Workshop Utility"),
+        ("Layered", "Transitional Weather Armor"),
+    ]
+
+    specific_titles = {
+        "Streetwear": [
+            "Concrete Volume & Proportion",
+            "Boxy Archive Rotation",
+            "Subway Utility Statement",
+            "Heavyweight Street Uniform",
         ],
         "Casual": [
             "Coffee Run Relaxed Drape",
@@ -415,11 +480,17 @@ def algorithmic_stylist_fallback(
             "Effortless Matinee Layers",
             "Easygoing Texture Play",
         ],
-        "Layered": [
-            "Transitional Weather Armor",
-            "Multi-Texture Studio Stack",
-            "Autumnal Depth & Dimension",
-            "Structured Outer-Shell Study",
+        "Smart Casual": [
+            "Gallery Opening Elevated Mix",
+            "Creative Director Off-Duty",
+            "Polished Weekend Tailoring",
+            "Architectural Smart Layering",
+        ],
+        "Minimalist": [
+            "Tonal Brutalist Uniform",
+            "Nordic Gallery Proportions",
+            "Clean-Line Monolith Study",
+            "Quiet Luxury Silhouettes",
         ],
         "Formal": [
             "Sharp Sartorial Contrast",
@@ -427,11 +498,11 @@ def algorithmic_stylist_fallback(
             "Refined Creative Director",
             "Polished Tonal Drape",
         ],
-        "Streetwear": [
-            "Concrete Volume & Proportion",
-            "Boxy Archive Rotation",
-            "Subway Utility Statement",
-            "Heavyweight Street Uniform",
+        "Athleisure": [
+            "Off-Duty Lounge Rotation",
+            "Elevated Fleece & Sneaker Study",
+            "Recovery Day Monochrome",
+            "Sport-Utility Street Ease",
         ],
         "Workwear": [
             "Heritage Workshop Utility",
@@ -439,50 +510,539 @@ def algorithmic_stylist_fallback(
             "Chore-Coat Studio Rotation",
             "Industrial Earth-Tone Uniform",
         ],
+        "Layered": [
+            "Transitional Weather Armor",
+            "Multi-Texture Studio Stack",
+            "Autumnal Depth & Dimension",
+            "Structured Outer-Shell Study",
+        ],
     }
 
-    titles = creative_titles.get(vibe, creative_titles["Editorial Mix"])
-    pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    base_combinations: List[List[Dict[str, Any]]] = []
     for t in tops:
         for b in bottoms:
-            pairs.append((t, b))
+            base_combinations.append([t, b])
+    for op in one_pieces:
+        base_combinations.append([op])
 
     outfits = []
-    max_outfits = min(len(pairs), 4)
+    max_outfits = min(len(base_combinations), 6)
     for idx in range(max_outfits):
-        top, bottom = pairs[idx]
-        chosen_ids = [top["id"], bottom["id"]]
+        core_items = base_combinations[idx]
+        chosen_ids = [item["id"] for item in core_items]
         layers_desc = []
 
-        if outerwear and (idx % 2 == 0 or vibe in ("Layered", "Workwear", "Editorial Mix")):
+        if target_vibe:
+            outfit_vibe = target_vibe
+            titles_list = specific_titles.get(outfit_vibe, specific_titles["Casual"])
+            title = titles_list[idx % len(titles_list)]
+        else:
+            outfit_vibe, title = vibe_profiles[idx % len(vibe_profiles)]
+
+        if outerwear and (idx % 2 == 0 or outfit_vibe in ("Layered", "Workwear", "Streetwear", "Smart Casual")):
             outer = outerwear[idx % len(outerwear)]
-            chosen_ids.insert(0, outer["id"])
-            layers_desc.append(f"anchored by the {outer['color']} {outer['type']}")
+            if outer["id"] not in chosen_ids:
+                chosen_ids.insert(0, outer["id"])
+                layers_desc.append(f"anchored by the {outer['color']} {outer['type']}")
 
         if footwear:
             shoe = footwear[idx % len(footwear)]
-            chosen_ids.append(shoe["id"])
-            layers_desc.append(f"grounded with {shoe['color']} {shoe['type']}")
+            if shoe["id"] not in chosen_ids:
+                chosen_ids.append(shoe["id"])
+                layers_desc.append(f"grounded with {shoe['color']} {shoe['type']}")
 
         if accessories and idx % 2 == 1:
             acc = accessories[idx % len(accessories)]
-            chosen_ids.append(acc["id"])
-            layers_desc.append(f"finished with the {acc['type']}")
+            if acc["id"] not in chosen_ids:
+                chosen_ids.append(acc["id"])
+                layers_desc.append(f"finished with the {acc['type']}")
 
         layer_clause = (", " + " and ".join(layers_desc)) if layers_desc else ""
-        notes = (
-            f"Balances the {top['fit']} silhouette of the {top['color']} {top['type']} "
-            f"against the {bottom['fit']} cut of the {bottom['color']} {bottom['type']}{layer_clause}. "
-            f"The palette bridges tonal neutrals with rich tactile contrast."
-        )
+        if len(core_items) == 2:
+            top, bottom = core_items[0], core_items[1]
+            notes = (
+                f"Balances the {top['fit']} silhouette of the {top['color']} {top['type']} "
+                f"against the {bottom['fit']} cut of the {bottom['color']} {bottom['type']}{layer_clause}. "
+                f"Curated for a cohesive {outfit_vibe.lower()} aesthetic."
+            )
+        else:
+            op = core_items[0]
+            notes = (
+                f"Centers on the {op['fit']} silhouette of the {op['color']} {op['type']}{layer_clause} "
+                f"for an effortless {outfit_vibe.lower()} statement."
+            )
 
         outfits.append({
-            "outfit_name": titles[idx % len(titles)],
+            "outfit_name": title,
+            "vibe": outfit_vibe,
             "item_ids": chosen_ids,
             "styling_notes": notes,
         })
 
     return outfits
+
+
+# ---------------------------------------------------------------------------
+# Feature 1: "Should I Buy It?" In-Store Purchase Evaluator
+# ---------------------------------------------------------------------------
+
+def extract_color_family(color_str: str) -> str:
+    """Group nuanced color descriptions into core color families for redundancy comparison."""
+    c = (color_str or "").lower()
+    if any(w in c for w in ["black", "onyx", "espresso", "ebony", "jet"]):
+        return "black"
+    if any(w in c for w in ["charcoal", "graphite", "slate", "grey", "gray", "heather", "ash", "silver"]):
+        return "grey/charcoal"
+    if any(w in c for w in ["white", "ecru", "cream", "ivory", "bone", "chalk", "off-white"]):
+        return "white/ecru"
+    if any(w in c for w in ["indigo", "navy", "blue", "cobalt", "denim", "sky", "ice blue"]):
+        return "blue/indigo"
+    if any(w in c for w in ["olive", "green", "sage", "forest", "khaki", "moss", "drab"]):
+        return "olive/green"
+    if any(w in c for w in ["brown", "tobacco", "tan", "camel", "cognac", "taupe", "beige", "chocolate"]):
+        return "brown/tan"
+    if any(w in c for w in ["red", "maroon", "burgundy", "wine", "oxblood", "crimson", "pink"]):
+        return "red/burgundy"
+    return c.strip() or "neutral"
+
+
+def detect_dominant_color_name(filepath: str) -> str:
+    """Inspect image pixels via Pillow to estimate a human-readable color name when offline."""
+    if not PIL_AVAILABLE or filepath.lower().endswith(".svg"):
+        return "charcoal neutral"
+    try:
+        with Image.open(filepath) as img:
+            img = img.convert("RGB").resize((48, 48))
+            pixels = list(img.getdata())
+            center_pixels = []
+            for y in range(12, 36):
+                for x in range(12, 36):
+                    center_pixels.append(pixels[y * 48 + x])
+            sample = center_pixels if center_pixels else pixels
+            r_avg = sum(p[0] for p in sample) / len(sample)
+            g_avg = sum(p[1] for p in sample) / len(sample)
+            b_avg = sum(p[2] for p in sample) / len(sample)
+
+            brightness = (r_avg + g_avg + b_avg) / 3.0
+            if brightness < 45:
+                return "solid black"
+            if brightness > 220 and max(abs(r_avg - g_avg), abs(g_avg - b_avg)) < 18:
+                return "crisp white"
+            if brightness > 190 and r_avg >= g_avg >= b_avg:
+                return "ecru cream"
+            if max(abs(r_avg - g_avg), abs(g_avg - b_avg), abs(r_avg - b_avg)) < 18:
+                return "charcoal grey" if brightness < 115 else "heather grey"
+            if b_avg > r_avg + 20 and b_avg > g_avg + 10:
+                return "deep navy blue" if brightness < 95 else "medium blue wash"
+            if g_avg >= r_avg and g_avg > b_avg + 12:
+                return "olive green"
+            if r_avg > g_avg + 25 and r_avg > b_avg + 25:
+                return "burgundy maroon" if brightness < 110 else "terracotta red"
+            if r_avg > b_avg + 20 and g_avg > b_avg + 10:
+                return "tobacco brown" if brightness < 130 else "warm taupe"
+    except Exception:
+        pass
+    return "olive green"
+
+
+def infer_candidate_from_hint(filepath: str, original_filename: str = "") -> Dict[str, str]:
+    """Infer candidate garment metadata for offline evaluation fallback."""
+    hint = (original_filename or os.path.basename(filepath)).lower()
+    stem = os.path.splitext(hint)[0].replace("_", " ").replace("-", " ")
+
+    detected_color = detect_dominant_color_name(filepath)
+    for c_word in [
+        "olive green", "olive", "black", "white", "ecru", "cream", "navy",
+        "indigo", "blue", "green", "brown", "tobacco", "taupe", "tan",
+        "khaki", "grey", "gray", "charcoal", "maroon", "burgundy",
+    ]:
+        if c_word in stem:
+            detected_color = c_word
+            break
+
+    category = "Outerwear"
+    fit = "relaxed"
+    aesthetic = "contemporary street utility"
+
+    if any(k in stem for k in ["dress", "jumpsuit", "romper", "gown", "one piece", "one-piece"]):
+        category = "One-Piece / Dresses"
+        fit = "tailored"
+        aesthetic = "minimalist editorial"
+    elif any(k in stem for k in ["jean", "denim", "pant", "trouser", "cargo", "chino", "short", "sweatpant", "skirt"]):
+        category = "Bottoms"
+        fit = "straight-leg" if "jean" in stem else "relaxed"
+        aesthetic = "casual workwear" if "cargo" in stem else "modern casual"
+    elif any(k in stem for k in ["shoe", "sneaker", "loafer", "boot", "derby", "mule", "runner", "heel"]):
+        category = "Footwear"
+        fit = "structured"
+        aesthetic = "smart casual footwear"
+    elif any(k in stem for k in ["belt", "bag", "tote", "cap", "hat", "beanie", "scarf", "watch"]):
+        category = "Accessories"
+        fit = "one-size"
+        aesthetic = "minimalist accessory"
+    elif any(k in stem for k in ["hoodie", "crewneck", "sweater", "shirt", "button", "polo", "tank", "tee", "t-shirt", "top", "knit"]):
+        category = "Tops"
+        fit = "oversized" if "hoodie" in stem else "relaxed"
+        aesthetic = "streetwear essentials" if "hoodie" in stem else "clean everyday layering"
+    elif any(k in stem for k in ["jacket", "coat", "trench", "bomber", "blazer", "parka", "cardigan", "overshirt"]):
+        category = "Outerwear"
+        fit = "boxy" if "work" in stem else "relaxed"
+        aesthetic = "military utility" if "olive" in detected_color else "architectural outerwear"
+
+    return {
+        "category": category,
+        "color": detected_color,
+        "fit": fit,
+        "aesthetic": aesthetic,
+    }
+
+
+def normalize_purchase_evaluation(
+    raw_data: Dict[str, Any],
+    inventory: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Validate and hydrate the purchase evaluation response so it strictly adheres
+    to the required JSON format while also hydrating `existing_items` for UI cards.
+    """
+    clothes_by_id: Dict[int, Dict[str, Any]] = {}
+    for item in inventory:
+        try:
+            clothes_by_id[int(item["id"])] = item
+        except (KeyError, ValueError, TypeError):
+            continue
+
+    cand_raw = raw_data.get("candidate_item") or {}
+    cand_category = database.normalize_category(cand_raw.get("category"), default="Outerwear")
+    candidate_item = {
+        "category": cand_category,
+        "color": str(cand_raw.get("color") or "olive green").strip(),
+        "fit": str(cand_raw.get("fit") or "relaxed").strip(),
+        "aesthetic": str(cand_raw.get("aesthetic") or "contemporary utility").strip(),
+    }
+
+    raw_decision = str(raw_data.get("decision") or "BUY").strip().upper()
+    if raw_decision in ("DON'T BUY", "DONT BUY", "NO", "SKIP", "PASS"):
+        decision = "PASS"
+    elif raw_decision in ("THINK TWICE", "MAYBE", "CONSIDER", "CAUTION"):
+        decision = "THINK TWICE"
+    else:
+        decision = "BUY"
+
+    is_redundant = bool(raw_data.get("is_redundant", False))
+    redundancy_notes = raw_data.get("redundancy_notes")
+    if redundancy_notes is not None:
+        redundancy_notes = str(redundancy_notes).strip() or None
+
+    decision_summary = str(
+        raw_data.get("decision_summary")
+        or "Evaluated against your current closet for silhouette versatility and color coordination."
+    ).strip()
+
+    try:
+        total_outfit_count = max(0, int(raw_data.get("total_outfit_count", 0)))
+    except (ValueError, TypeError):
+        total_outfit_count = 0
+
+    raw_top_outfits = raw_data.get("top_outfits") or []
+    normalized_top_outfits = []
+
+    for idx, o in enumerate(raw_top_outfits[:3]):
+        if not isinstance(o, dict):
+            continue
+        raw_ids = o.get("existing_item_ids") or o.get("item_ids") or []
+        formatted_str_ids: List[str] = []
+        hydrated_items: List[Dict[str, Any]] = []
+
+        for rid in raw_ids:
+            num_id = None
+            if isinstance(rid, int):
+                num_id = rid
+            elif isinstance(rid, str):
+                cleaned_id = rid.strip().lower().replace("item_", "").replace("#", "")
+                if cleaned_id.isdigit():
+                    num_id = int(cleaned_id)
+            if num_id is not None and num_id in clothes_by_id:
+                str_id = f"item_{num_id}"
+                if str_id not in formatted_str_ids:
+                    formatted_str_ids.append(str_id)
+                    hydrated_items.append(clothes_by_id[num_id])
+            elif isinstance(rid, str) and rid.strip():
+                if rid.strip() not in formatted_str_ids:
+                    formatted_str_ids.append(rid.strip())
+
+        outfit_vibe = database.normalize_vibe(o.get("vibe"), default="Casual")
+        normalized_top_outfits.append({
+            "title": str(o.get("title") or o.get("outfit_name") or f"Curated Look #{idx + 1}").strip(),
+            "vibe": outfit_vibe,
+            "existing_item_ids": formatted_str_ids,
+            "existing_items": hydrated_items,
+            "styling_tips": str(
+                o.get("styling_tips")
+                or o.get("styling_notes")
+                or "Pair with complementary tonal pieces from your current rotation."
+            ).strip(),
+        })
+
+    return {
+        "candidate_item": candidate_item,
+        "decision": decision,
+        "decision_summary": decision_summary,
+        "is_redundant": is_redundant,
+        "redundancy_notes": redundancy_notes,
+        "total_outfit_count": total_outfit_count,
+        "top_outfits": normalized_top_outfits,
+    }
+
+
+def fallback_evaluate_purchase(
+    filepath: str,
+    original_filename: str,
+    inventory: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Deterministic in-store purchase evaluator when Gemini API key is not configured or fails.
+    Compares the candidate item against the user's real closet inventory to detect duplicates,
+    count viable outfit combinations, and build the top 3 visual outfits.
+    """
+    cand = infer_candidate_from_hint(filepath, original_filename)
+    cand_cat = database.normalize_category(cand["category"], default="Outerwear")
+    cand_color_fam = extract_color_family(cand["color"])
+
+    # Partition existing closet
+    same_cat_items = [
+        i for i in inventory
+        if database.normalize_category(i.get("category")) == cand_cat
+    ]
+    similar_items = [
+        i for i in same_cat_items
+        if extract_color_family(i.get("color", "")) == cand_color_fam
+        and i.get("color", "").lower() != "unassigned"
+    ]
+
+    tops = [i for i in inventory if database.normalize_category(i.get("category")) == "Tops"]
+    bottoms = [i for i in inventory if database.normalize_category(i.get("category")) == "Bottoms"]
+    outerwear = [i for i in inventory if database.normalize_category(i.get("category")) == "Outerwear"]
+    footwear = [i for i in inventory if database.normalize_category(i.get("category")) == "Footwear"]
+    one_pieces = [i for i in inventory if database.normalize_category(i.get("category")) == "One-Piece / Dresses"]
+
+    # Calculate outfit potential metric with existing closet pieces
+    if cand_cat == "Tops":
+        total_outfit_count = len(bottoms) * max(1, len(outerwear) + 1)
+    elif cand_cat == "Bottoms":
+        total_outfit_count = len(tops) * max(1, len(outerwear) + 1)
+    elif cand_cat == "Outerwear":
+        total_outfit_count = max(len(tops) * len(bottoms), len(tops) + len(bottoms) + len(one_pieces))
+    elif cand_cat == "One-Piece / Dresses":
+        total_outfit_count = max(1, len(outerwear) + len(footwear))
+    elif cand_cat == "Footwear":
+        total_outfit_count = max(len(tops) * len(bottoms), len(inventory) // 2)
+    else:  # Accessories
+        total_outfit_count = max(len(tops) * len(bottoms), len(inventory) // 2)
+
+    # Determine redundancy and BUY / THINK TWICE / PASS recommendation
+    if len(similar_items) >= 2:
+        is_redundant = True
+        decision = "PASS"
+        matched_names = ", ".join(f"{i.get('color')} {i.get('type')}" for i in similar_items[:3])
+        redundancy_notes = (
+            f"You already own {len(similar_items)} {cand_color_fam} {cand_cat.lower()} pieces "
+            f"({matched_names}). Adding another creates high wardrobe overlap."
+        )
+        decision_summary = (
+            f"High redundancy alert: your closet already contains {len(similar_items)} very similar "
+            f"{cand['color']} {cand_cat.lower()} pieces. Pass on this purchase and shop your existing archive instead."
+        )
+    elif len(similar_items) == 1:
+        is_redundant = True
+        existing_match = similar_items[0]
+        decision = "THINK TWICE"
+        redundancy_notes = (
+            f"Closely overlaps with your existing {existing_match.get('color')} {existing_match.get('type')} "
+            f"(#{existing_match.get('id')})."
+        )
+        decision_summary = (
+            f"While this {cand['color']} {cand_cat.lower()} piece can form {total_outfit_count} outfits, "
+            f"you already own a similar {existing_match.get('color')} {existing_match.get('type')}. "
+            f"Only buy if the {cand['fit']} silhouette offers a distinct upgrade."
+        )
+    elif total_outfit_count == 0:
+        is_redundant = False
+        redundancy_notes = None
+        decision = "THINK TWICE"
+        decision_summary = (
+            f"No duplicates found, but your closet currently lacks complementary foundational pieces "
+            f"to build full outfits around this {cand['color']} {cand_cat.lower()} item."
+        )
+    else:
+        is_redundant = False
+        redundancy_notes = None
+        decision = "BUY"
+        gap_note = (
+            f"fills a {cand_cat.lower()} gap"
+            if len(same_cat_items) <= 1
+            else f"introduces a fresh {cand['color']} tone to your {cand_cat.lower()} rotation"
+        )
+        decision_summary = (
+            f"Strong wardrobe addition that {gap_note} and unlocks {total_outfit_count} cohesive outfit "
+            f"combinations with your existing pieces."
+        )
+
+    # Build Top 3 Outfits combining the candidate item with existing closet pieces
+    top_outfits = []
+    vibe_sequence = ["Streetwear", "Smart Casual", "Minimalist"]
+    title_sequence = [
+        f"Urban {cand['color'].title()} Rotation",
+        f"Elevated {cand['fit'].title()} Layering",
+        f"Tonal Studio Archive Look",
+    ]
+
+    for idx in range(3):
+        chosen: List[Dict[str, Any]] = []
+        if cand_cat == "Tops":
+            if bottoms:
+                chosen.append(bottoms[idx % len(bottoms)])
+            if outerwear and idx < len(outerwear):
+                chosen.append(outerwear[idx % len(outerwear)])
+            if footwear:
+                chosen.append(footwear[idx % len(footwear)])
+        elif cand_cat == "Bottoms":
+            if tops:
+                chosen.append(tops[idx % len(tops)])
+            if outerwear and idx < len(outerwear):
+                chosen.append(outerwear[idx % len(outerwear)])
+            if footwear:
+                chosen.append(footwear[idx % len(footwear)])
+        elif cand_cat == "Outerwear":
+            if tops:
+                chosen.append(tops[idx % len(tops)])
+            if bottoms:
+                chosen.append(bottoms[idx % len(bottoms)])
+            if footwear and idx % 2 == 0:
+                chosen.append(footwear[idx % len(footwear)])
+        else:
+            if tops:
+                chosen.append(tops[idx % len(tops)])
+            if bottoms:
+                chosen.append(bottoms[idx % len(bottoms)])
+
+        # Deduplicate chosen items
+        unique_chosen = []
+        seen_ids = set()
+        for c_item in chosen:
+            if c_item["id"] not in seen_ids:
+                seen_ids.add(c_item["id"])
+                unique_chosen.append(c_item)
+
+        if not unique_chosen and inventory:
+            unique_chosen = inventory[idx:idx + 2] or inventory[:2]
+
+        if unique_chosen:
+            names_str = " and ".join(f"{it.get('color')} {it.get('type')}" for it in unique_chosen)
+            top_outfits.append({
+                "title": title_sequence[idx % len(title_sequence)],
+                "vibe": vibe_sequence[idx % len(vibe_sequence)],
+                "existing_item_ids": [f"item_{it['id']}" for it in unique_chosen],
+                "existing_items": unique_chosen,
+                "styling_tips": (
+                    f"Pair this {cand['fit']} {cand['color']} candidate piece with your "
+                    f"{names_str} for balanced proportions."
+                ),
+            })
+            if len(inventory) < 3 and idx >= 0:
+                break
+
+    return {
+        "candidate_item": {
+            "category": cand_cat,
+            "color": cand["color"],
+            "fit": cand["fit"],
+            "aesthetic": cand["aesthetic"],
+        },
+        "decision": decision,
+        "decision_summary": decision_summary,
+        "is_redundant": is_redundant,
+        "redundancy_notes": redundancy_notes,
+        "total_outfit_count": total_outfit_count,
+        "top_outfits": top_outfits,
+    }
+
+
+def evaluate_purchase_with_gemini(
+    filepath: str,
+    original_filename: str,
+    inventory: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+) -> Tuple[Dict[str, Any], str]:
+    """
+    Run Gemini Multimodal evaluation comparing the candidate item photo against the user's closet catalog.
+    Falls back to `fallback_evaluate_purchase` if offline or no API key is configured.
+    """
+    mime_type, _ = mimetypes.guess_type(filepath)
+    if not mime_type or mime_type == "image/svg+xml":
+        mime_type = "image/jpeg"
+
+    compact_catalog = [
+        {
+            "id": f"item_{item['id']}",
+            "numeric_id": item["id"],
+            "name": item.get("type", "Clothing Item"),
+            "category": item.get("category", "Unassigned"),
+            "color": item.get("color", "Unassigned"),
+            "fit": item.get("fit", "Unassigned"),
+            "description": item.get("description", ""),
+        }
+        for item in inventory
+    ]
+
+    prompt_text = (
+        f"User's Current Closet Catalog ({len(compact_catalog)} items):\n"
+        f"{json.dumps(compact_catalog, indent=2)}\n\n"
+        "Analyze the attached candidate item image against this closet catalog and return the strict JSON evaluation."
+    )
+
+    if api_key and GENAI_SDK and not filepath.lower().endswith(".svg"):
+        try:
+            with open(filepath, "rb") as f:
+                image_bytes = f.read()
+
+            if GENAI_SDK == "google-genai":
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model=GEMINI_MODEL_NAME,
+                    contents=[
+                        genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                        prompt_text,
+                    ],
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=PURCHASE_EVALUATOR_SYSTEM_PROMPT,
+                        response_mime_type="application/json",
+                        temperature=0.3,
+                    ),
+                )
+                parsed = extract_json_payload(response.text)
+                return normalize_purchase_evaluation(parsed, inventory), f"gemini ({GEMINI_MODEL_NAME})"
+
+            elif GENAI_SDK == "google-generativeai":
+                legacy_genai.configure(api_key=api_key)
+                model = legacy_genai.GenerativeModel(
+                    model_name=GEMINI_MODEL_NAME,
+                    system_instruction=PURCHASE_EVALUATOR_SYSTEM_PROMPT,
+                    generation_config={"response_mime_type": "application/json", "temperature": 0.3},
+                )
+                response = model.generate_content(
+                    [
+                        {"mime_type": mime_type, "data": image_bytes},
+                        prompt_text,
+                    ]
+                )
+                parsed = extract_json_payload(response.text)
+                return normalize_purchase_evaluation(parsed, inventory), f"gemini ({GEMINI_MODEL_NAME})"
+        except Exception as exc:
+            app.logger.warning(f"Gemini Purchase Evaluator failed, using deterministic closet evaluator: {exc}")
+
+    fallback_result = fallback_evaluate_purchase(filepath, original_filename, inventory)
+    return normalize_purchase_evaluation(fallback_result, inventory), "closet-evaluator-fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +1073,7 @@ def generate_garment_svg(title: str, subtitle: str, bg_hex: str, accent_hex: str
 
 
 # ---------------------------------------------------------------------------
-# Page Routes
+# Page & Static Asset Routes
 # ---------------------------------------------------------------------------
 
 @app.route("/")
@@ -526,6 +1086,24 @@ def index():
 def outfits_page():
     """Render Page 2: 'Outfit Lookbook' AI Recommendations."""
     return render_template("outfits.html")
+
+
+@app.route("/static/css/<path:filename>")
+def serve_css(filename: str):
+    """Serve CSS from static/css/ or fallback to BASE_DIR."""
+    static_css_dir = os.path.join(BASE_DIR, "static", "css")
+    if os.path.exists(os.path.join(static_css_dir, filename)):
+        return send_from_directory(static_css_dir, filename)
+    return send_from_directory(BASE_DIR, filename)
+
+
+@app.route("/static/js/<path:filename>")
+def serve_js(filename: str):
+    """Serve JS from static/js/ or fallback to BASE_DIR."""
+    static_js_dir = os.path.join(BASE_DIR, "static", "js")
+    if os.path.exists(os.path.join(static_js_dir, filename)):
+        return send_from_directory(static_js_dir, filename)
+    return send_from_directory(BASE_DIR, filename)
 
 
 @app.route("/uploads/<path:filename>")
@@ -548,6 +1126,8 @@ def api_status():
         "sdk_installed": GENAI_SDK,
         "model": GEMINI_MODEL_NAME,
         "total_items": len(all_items),
+        "canonical_categories": database.CANONICAL_CATEGORIES,
+        "standard_vibes": database.STANDARD_VIBES,
     })
 
 
@@ -564,13 +1144,27 @@ def api_get_clothes():
     items = database.get_all_clothes(category=category, search_query=search_query, sort_by=sort_by)
     all_unfiltered = database.get_all_clothes()
 
-    category_counts = {"all": len(all_unfiltered)}
+    # Initialize counts for both canonical names and lowercase/slug keys
+    category_counts: Dict[str, int] = {
+        "all": len(all_unfiltered),
+        "All": len(all_unfiltered),
+    }
+    for canon in database.ALL_VALID_CATEGORIES:
+        slug = re.sub(r"[^a-z0-9]+", "-", canon.lower()).strip("-")
+        category_counts[canon] = 0
+        category_counts[canon.lower()] = 0
+        category_counts[slug] = 0
+
     never_worn_count = 0
     worn_today_count = 0
 
     for item in all_unfiltered:
-        cat = item.get("category", "tops").lower()
-        category_counts[cat] = category_counts.get(cat, 0) + 1
+        canon_cat = database.normalize_category(item.get("category"), default="Unassigned")
+        slug_cat = re.sub(r"[^a-z0-9]+", "-", canon_cat.lower()).strip("-")
+        category_counts[canon_cat] = category_counts.get(canon_cat, 0) + 1
+        category_counts[canon_cat.lower()] = category_counts[canon_cat]
+        category_counts[slug_cat] = category_counts[canon_cat]
+
         state = item.get("last_worn_status", {}).get("state")
         if state == "never":
             never_worn_count += 1
@@ -595,6 +1189,7 @@ def api_upload_cloth():
     POST /api/upload
     Handle image upload (file or base64 camera capture), call Gemini 2.5 Flash Vision API,
     save file to disk, write metadata to SQLite, and return the newly created item JSON.
+    Implements Issue Fix 3: Graceful Offline & Missing API Key Fallback.
     """
     api_key = get_active_api_key()
     saved_filename = None
@@ -619,7 +1214,7 @@ def api_upload_cloth():
         original_filename = request.json.get("filename", "camera_capture.jpg")
         try:
             if "," in raw_b64:
-                header, b64_data = raw_b64.split(",", 1)
+                _, b64_data = raw_b64.split(",", 1)
             else:
                 b64_data = raw_b64
             image_bytes = base64.b64decode(b64_data)
@@ -632,14 +1227,20 @@ def api_upload_cloth():
     else:
         return jsonify({"error": "No garment image provided in request."}), 400
 
-    # 3. Call Gemini Vision API (with automatic fallback)
-    metadata, engine_used = analyze_garment_with_gemini(
+    # 3. Call Gemini Vision API (with Issue Fix 3 Unassigned fallback when key is missing or call fails)
+    metadata, engine_used, fallback_used = analyze_garment_with_gemini(
         filepath=filepath,
         original_filename=original_filename,
         api_key=api_key,
     )
 
     form_data = request.form if request.form else (request.json if request.is_json else {})
+    if form_data.get("name") and not form_data.get("type"):
+        metadata["type"] = form_data.get("name")
+        metadata["name"] = form_data.get("name")
+    if form_data.get("style_notes") and not form_data.get("description"):
+        metadata["description"] = form_data.get("style_notes")
+        metadata["style_notes"] = form_data.get("style_notes")
     for field in ("type", "category", "color", "fit", "size", "description"):
         if form_data.get(field):
             metadata[field] = form_data.get(field)
@@ -647,32 +1248,125 @@ def api_upload_cloth():
     image_url = f"/uploads/{saved_filename}"
     new_item = database.insert_cloth(
         image_url=image_url,
-        garment_type=metadata.get("type", "archive garment"),
-        category=metadata.get("category", "tops"),
-        color=metadata.get("color", "neutral"),
-        fit=metadata.get("fit", "relaxed"),
+        garment_type=metadata.get("type", "Clothing Item"),
+        category=metadata.get("category", "Unassigned"),
+        color=metadata.get("color", "Unassigned"),
+        fit=metadata.get("fit", "Unassigned"),
         size=metadata.get("size"),
-        description=metadata.get("description", ""),
+        description=metadata.get("description", "Unassigned"),
     )
 
+    fallback_notice = "AI tagging unavailable. Defaults set to Unassigned — please edit manually."
     return jsonify({
         "item": new_item,
         "engine": engine_used,
-        "message": "Garment cataloged and analyzed successfully."
+        "fallback_used": fallback_used,
+        "notice": fallback_notice if fallback_used else None,
+        "message": fallback_notice if fallback_used else "Garment cataloged and analyzed successfully."
     }), 201
+
+
+@app.route("/api/evaluate-purchase", methods=["POST"])
+def api_evaluate_purchase():
+    """
+    POST /api/evaluate-purchase
+    Feature 1: "Should I Buy It?" In-Store Evaluator.
+    Accepts a candidate item image (multipart `image`/`file` or JSON `image_base64`)
+    plus optional closet catalog JSON (defaults to current SQLite wardrobe).
+    Returns structured evaluation JSON with decision, reasoning, redundancy alert,
+    outfit potential metric, and top 3 outfits.
+    """
+    api_key = get_active_api_key()
+    saved_filename = None
+    original_filename = ""
+
+    # 1. Extract candidate image from multipart upload or base64 JSON
+    upload_file = None
+    for file_key in ("image", "file", "candidate_image"):
+        if file_key in request.files and request.files[file_key].filename:
+            upload_file = request.files[file_key]
+            break
+
+    if upload_file is not None:
+        original_filename = upload_file.filename
+        if not allowed_file(original_filename):
+            return jsonify({"error": "Unsupported image file format. Use JPG, PNG, WEBP, GIF, or SVG."}), 400
+        ext = original_filename.rsplit(".", 1)[1].lower()
+        unique_name = f"eval_{uuid.uuid4().hex[:12]}.{ext}"
+        saved_filename = secure_filename(unique_name)
+        filepath = os.path.join(app.config["UPLOAD_FOLDER"], saved_filename)
+        upload_file.save(filepath)
+    elif request.is_json and request.json.get("image_base64"):
+        raw_b64 = request.json["image_base64"]
+        original_filename = request.json.get("filename", "candidate_capture.jpg")
+        try:
+            if "," in raw_b64:
+                _, b64_data = raw_b64.split(",", 1)
+            else:
+                b64_data = raw_b64
+            image_bytes = base64.b64decode(b64_data)
+            saved_filename = f"eval_{uuid.uuid4().hex[:12]}.jpg"
+            filepath = os.path.join(app.config["UPLOAD_FOLDER"], saved_filename)
+            with open(filepath, "wb") as f:
+                f.write(image_bytes)
+        except Exception as exc:
+            return jsonify({"error": f"Failed to decode candidate image: {exc}"}), 400
+    else:
+        return jsonify({"error": "No candidate garment image provided for evaluation."}), 400
+
+    # 2. Load current closet catalog (from request payload if explicitly supplied, otherwise SQLite DB)
+    inventory: Optional[List[Dict[str, Any]]] = None
+    raw_catalog = None
+    if request.form:
+        raw_catalog = request.form.get("catalog") or request.form.get("closet")
+    elif request.is_json and request.json:
+        raw_catalog = request.json.get("catalog") or request.json.get("closet")
+
+    if raw_catalog:
+        try:
+            parsed_cat = json.loads(raw_catalog) if isinstance(raw_catalog, str) else raw_catalog
+            if isinstance(parsed_cat, list) and len(parsed_cat) > 0:
+                inventory = parsed_cat
+        except Exception:
+            inventory = None
+
+    if not inventory:
+        inventory = database.get_all_clothes()
+
+    # 3. Evaluate purchase via Gemini Multimodal (or deterministic closet fallback)
+    evaluation, engine_used = evaluate_purchase_with_gemini(
+        filepath=filepath,
+        original_filename=original_filename,
+        inventory=inventory,
+        api_key=api_key,
+    )
+
+    evaluation["candidate_image_url"] = f"/uploads/{saved_filename}"
+    evaluation["engine"] = engine_used
+    return jsonify(evaluation), 200
 
 
 @app.route("/api/clothes/<int:item_id>", methods=["PUT"])
 def api_update_cloth(item_id: int):
     """
     PUT /api/clothes/<id>
-    Allow manual user editing of type, category, color, fit, size, description, or last_worn.
+    Allow manual user editing of type/name, category, color, fit, size, description/style_notes, or last_worn.
+    Validates category against canonical categories.
     """
     existing = database.get_cloth_by_id(item_id)
     if not existing:
         return jsonify({"error": f"Clothing item #{item_id} not found."}), 404
 
     payload = request.get_json(silent=True) or {}
+    if "category" in payload and payload["category"] is not None:
+        raw_cat = str(payload["category"]).strip()
+        norm_cat = database.normalize_category(raw_cat, default="__INVALID__")
+        if norm_cat == "__INVALID__":
+            return jsonify({
+                "error": f"Invalid category '{raw_cat}'. Must be one of: {', '.join(database.CANONICAL_CATEGORIES)}"
+            }), 400
+        payload["category"] = norm_cat
+
     updated = database.update_cloth(item_id, payload)
     return jsonify({
         "item": updated,
@@ -716,8 +1410,15 @@ def api_get_outfits():
     """
     GET /api/outfits
     Fetch saved AI outfit combinations hydrated with full garment records.
+    Supports optional `?vibe=` filter query parameter.
     """
+    vibe_filter = request.args.get("vibe", "").strip()
     outfits = database.get_hydrated_outfits()
+    if vibe_filter and vibe_filter.lower() not in ("all", "editorial mix"):
+        outfits = [
+            o for o in outfits
+            if (o.get("vibe") or "").strip().lower() == vibe_filter.lower()
+        ]
     return jsonify({"outfits": outfits})
 
 
@@ -726,16 +1427,17 @@ def api_generate_outfits():
     """
     POST /api/generate-outfits
     Query all closet items, construct payload for Gemini 2.5 Flash Stylist,
-    parse outfit IDs, persist to SQLite, and return hydrated outfit data with image paths.
+    parse outfit IDs and explicit per-outfit vibe tags, persist to SQLite,
+    and return hydrated outfit data with image paths.
     """
     api_key = get_active_api_key()
     payload = request.get_json(silent=True) or {}
-    vibe = payload.get("vibe", "Editorial Mix")
+    vibe = payload.get("vibe", "All")
 
     inventory = database.get_all_clothes()
     if len(inventory) < 2:
         return jsonify({
-            "error": "Add at least 2 garments (ideally 1 top and 1 bottom) to your wardrobe before generating outfits."
+            "error": "Add at least 2 garments (ideally 1 Top and 1 Bottom) to your wardrobe before generating outfits."
         }), 400
 
     generated_list, engine_used = generate_outfits_with_gemini(
@@ -794,7 +1496,8 @@ def api_seed_demo():
     """
     POST /api/seed-demo
     Populate an 8-piece designer capsule wardrobe with studio SVG garment illustrations
-    so users can immediately test filtering, inline-editing, wearing, and AI outfit styling.
+    using canonical categories so users can immediately test filtering, inline-editing,
+    wearing, AI outfit styling, and the 'Should I Buy It?' In-Store Evaluator.
     """
     today = date.today()
     demo_pieces = [
@@ -806,7 +1509,7 @@ def api_seed_demo():
             "fg": "#9A6B43",
             "silhouette": "jacket",
             "type": "vintage work jacket",
-            "category": "outerwear",
+            "category": "Outerwear",
             "color": "faded tobacco brown",
             "fit": "boxy",
             "size": "L",
@@ -821,7 +1524,7 @@ def api_seed_demo():
             "fg": "#EAE6DF",
             "silhouette": "tee",
             "type": "heavyweight crewneck tee",
-            "category": "tops",
+            "category": "Tops",
             "color": "ecru",
             "fit": "boxy",
             "size": "M",
@@ -836,7 +1539,7 @@ def api_seed_demo():
             "fg": "#C5D8EB",
             "silhouette": "shirt",
             "type": "poplin button-up shirt",
-            "category": "tops",
+            "category": "Tops",
             "color": "ice blue",
             "fit": "oversized",
             "size": None,
@@ -851,7 +1554,7 @@ def api_seed_demo():
             "fg": "#4B5563",
             "silhouette": "sweater",
             "type": "merino wool crewneck",
-            "category": "tops",
+            "category": "Tops",
             "color": "deep charcoal",
             "fit": "relaxed",
             "size": "L",
@@ -866,7 +1569,7 @@ def api_seed_demo():
             "fg": "#2B3D5B",
             "silhouette": "pants",
             "type": "selvedge denim jeans",
-            "category": "bottoms",
+            "category": "Bottoms",
             "color": "raw dark indigo",
             "fit": "straight-leg",
             "size": "32",
@@ -881,7 +1584,7 @@ def api_seed_demo():
             "fg": "#5A6650",
             "silhouette": "cargo",
             "type": "utility cargo trousers",
-            "category": "bottoms",
+            "category": "Bottoms",
             "color": "olive drab",
             "fit": "wide-leg",
             "size": None,
@@ -896,7 +1599,7 @@ def api_seed_demo():
             "fg": "#272320",
             "silhouette": "shoes",
             "type": "leather penny loafers",
-            "category": "footwear",
+            "category": "Footwear",
             "color": "espresso black",
             "fit": "structured",
             "size": "42",
@@ -911,7 +1614,7 @@ def api_seed_demo():
             "fg": "#1F1F1F",
             "silhouette": "belt",
             "type": "minimalist leather belt",
-            "category": "accessories",
+            "category": "Accessories",
             "color": "matte black",
             "fit": "slim",
             "size": None,

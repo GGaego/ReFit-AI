@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>My Wardrobe — Smart Closet & Style Engine</title>
+  <title>My Wardrobe — Smart Closet &amp; Style Engine</title>
   <!-- Editorial Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -30,6 +30,9 @@
         <button type="button" id="btnApiKeyModal" class="engine-pill" title="Configure Gemini API Key">
           <span id="engineStatusDot" class="status-dot"></span>
           <span id="engineStatusText">Gemini 2.5 Flash</span>
+        </button>
+        <button type="button" id="btnOpenEvaluator" class="btn btn-scanner">
+          🛍️ Buy Less
         </button>
         <button type="button" id="btnSeedDemo" class="btn btn-outline">
           + Load Studio Capsule
@@ -72,26 +75,34 @@
       </div>
     </section>
 
+
+
     <!-- Filter & Search Controls -->
     <section class="filter-toolbar" aria-label="Catalog Filters">
       <div class="category-tabs" id="categoryTabs">
         <button class="cat-tab active" data-category="all">
           All <span class="cat-count" id="count-all">0</span>
         </button>
-        <button class="cat-tab" data-category="tops">
+        <button class="cat-tab" data-category="Tops">
           Tops <span class="cat-count" id="count-tops">0</span>
         </button>
-        <button class="cat-tab" data-category="outerwear">
-          Outerwear <span class="cat-count" id="count-outerwear">0</span>
-        </button>
-        <button class="cat-tab" data-category="bottoms">
+        <button class="cat-tab" data-category="Bottoms">
           Bottoms <span class="cat-count" id="count-bottoms">0</span>
         </button>
-        <button class="cat-tab" data-category="footwear">
+        <button class="cat-tab" data-category="Outerwear">
+          Outerwear <span class="cat-count" id="count-outerwear">0</span>
+        </button>
+        <button class="cat-tab" data-category="Footwear">
           Footwear <span class="cat-count" id="count-footwear">0</span>
         </button>
-        <button class="cat-tab" data-category="accessories">
+        <button class="cat-tab" data-category="Accessories">
           Accessories <span class="cat-count" id="count-accessories">0</span>
+        </button>
+        <button class="cat-tab" data-category="One-Piece / Dresses">
+          One-Piece / Dresses <span class="cat-count" id="count-one-piece-dresses">0</span>
+        </button>
+        <button class="cat-tab" data-category="Unassigned" id="tabUnassigned">
+          Unassigned <span class="cat-count" id="count-unassigned">0</span>
         </button>
       </div>
 
@@ -122,13 +133,13 @@
     <!-- Empty Wardrobe State -->
     <div id="emptyState" class="empty-state" style="display: none;">
       <div class="empty-state-icon">🧥</div>
-      <h2 class="empty-state-title">Your Digital Wardrobe is Empty</h2>
+      <h2 class="empty-state-title">No Matching Pieces in This View</h2>
       <p class="empty-state-copy">
         Upload a garment photo (or snap one with your camera) for automatic Gemini 2.5 Vision tagging, or load our 8-piece archival studio capsule to test the style engine right away.
       </p>
       <div class="empty-state-actions">
         <button type="button" id="btnEmptyUpload" class="btn btn-primary">
-          ↑ Upload First Piece
+          ↑ Upload Piece
         </button>
         <button type="button" id="btnEmptySeed" class="btn btn-outline">
           + Load 8-Piece Studio Capsule
@@ -155,9 +166,9 @@
 
           <!-- Drag & Drop Zone -->
           <div id="dropzoneArea" class="dropzone">
-            <input type="file" id="fileInput" name="image" accept="image/*" hidden />
+            <input type="file" id="fileInput" name="image" accept="image/*" capture="environment" hidden />
             <p style="font-weight: 600; margin-bottom: 4px;">Drag &amp; drop garment photo here</p>
-            <p style="font-size: 0.78rem; color: var(--text-muted);">or click to browse JPG, PNG, WEBP (Max 16MB)</p>
+            <p style="font-size: 0.78rem; color: var(--text-muted);">or click to browse / capture JPG, PNG, WEBP (Max 16MB)</p>
           </div>
 
           <!-- Live Camera Stream Box -->
@@ -172,7 +183,7 @@
           </div>
 
           <p style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-secondary);">
-            Gemini 2.5 Flash Vision will automatically extract <strong>type</strong>, <strong>category</strong>, <strong>color</strong>, <strong>fit</strong>, and <strong>aesthetic description</strong>. Size defaults to <code>null</code> until assigned.
+            Gemini 2.5 Flash Vision will automatically extract <strong>name/type</strong>, <strong>category</strong>, <strong>color</strong>, <strong>fit</strong>, and <strong>style notes</strong>. If offline or no API key is set, safe <code>Unassigned</code> defaults are applied.
           </p>
         </div>
         <div class="modal-footer">
@@ -186,7 +197,7 @@
   </div>
 
   <!-- =====================================================================
-       Modal 2: Quick-Edit Garment Metadata Drawer
+       Modal 2: Quick-Edit Garment Metadata Drawer (Issue Fix 2 & 3)
        ===================================================================== -->
   <div class="modal-backdrop" id="editModal" role="dialog" aria-modal="true" aria-labelledby="editModalTitle">
     <div class="modal-dialog">
@@ -197,19 +208,26 @@
       <form id="editForm">
         <input type="hidden" id="editItemId" />
         <div class="modal-body">
+          <!-- Issue Fix 3: Prompt notice when editing an item with Unassigned fallback defaults -->
+          <div id="editUnassignedNotice" class="unassigned-notice-banner">
+            ⚠️ AI tagging was unavailable when this item was added. Please assign a canonical <strong>Category</strong> and update the <strong>Unassigned</strong> attributes below.
+          </div>
+
           <div class="form-grid">
             <div class="form-group">
-              <label class="form-label" for="editType">Garment Type</label>
+              <label class="form-label" for="editType">Garment Name / Type</label>
               <input type="text" id="editType" class="form-input" required placeholder="e.g., vintage work jacket" />
             </div>
             <div class="form-group">
-              <label class="form-label" for="editCategory">Category</label>
-              <select id="editCategory" class="form-select">
-                <option value="tops">tops</option>
-                <option value="outerwear">outerwear</option>
-                <option value="bottoms">bottoms</option>
-                <option value="footwear">footwear</option>
-                <option value="accessories">accessories</option>
+              <label class="form-label" for="editCategory">Category (Standardized)</label>
+              <select id="editCategory" class="form-select" required>
+                <option value="Unassigned" id="optUnassignedCategory">-- Unassigned (Please Categorize) --</option>
+                <option value="Tops">Tops</option>
+                <option value="Bottoms">Bottoms</option>
+                <option value="Outerwear">Outerwear</option>
+                <option value="Footwear">Footwear</option>
+                <option value="Accessories">Accessories</option>
+                <option value="One-Piece / Dresses">One-Piece / Dresses</option>
               </select>
             </div>
             <div class="form-group">
@@ -221,7 +239,7 @@
               <input type="text" id="editFit" class="form-input" required placeholder="e.g., boxy, relaxed, straight-leg" />
             </div>
             <div class="form-group">
-              <label class="form-label" for="editSize">Size (Optional / Null)</label>
+              <label class="form-label" for="editSize">Size (Optional / Unassigned)</label>
               <input type="text" id="editSize" class="form-input" placeholder="Unassigned (e.g., M, L, 32, 42)" />
             </div>
             <div class="form-group">
@@ -229,7 +247,7 @@
               <input type="date" id="editLastWorn" class="form-input" />
             </div>
             <div class="form-group full-width">
-              <label class="form-label" for="editDescription">Archival &amp; Aesthetic Description</label>
+              <label class="form-label" for="editDescription">Style Notes &amp; Archival Description</label>
               <textarea id="editDescription" rows="3" class="form-textarea" placeholder="Details on textures, hardware, stitching, and vibe..."></textarea>
             </div>
           </div>
@@ -248,7 +266,88 @@
   </div>
 
   <!-- =====================================================================
-       Modal 3: Gemini API Key Settings (Optional Local Override)
+       Modal 3: Feature 1 — "Should I Buy It?" In-Store Evaluator
+       ===================================================================== -->
+  <div class="modal-backdrop" id="evaluatorModal" role="dialog" aria-modal="true" aria-labelledby="evaluatorModalTitle">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3 class="modal-title" id="evaluatorModalTitle">🛍️ "Should I Buy It?" // In-Store Purchase Evaluator</h3>
+        <button type="button" class="modal-close" data-close="evaluatorModal">&times;</button>
+      </div>
+      <form id="evaluatorForm">
+        <div class="modal-body">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+            <div class="upload-mode-tabs">
+              <button type="button" class="btn btn-sm btn-primary" id="evalTabFileMode">Photo Upload / Mobile Camera</button>
+              <button type="button" class="btn btn-sm btn-outline" id="evalTabCameraMode">Live Webcam Stream</button>
+            </div>
+            <span style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted);">
+              Compares candidate photo against your current closet catalog
+            </span>
+          </div>
+
+          <!-- File Upload / Mobile Camera Input -->
+          <div id="evalDropzoneArea" class="dropzone">
+            <input type="file" id="evalFileInput" name="image" accept="image/*" capture="environment" hidden />
+            <p style="font-weight: 600; margin-bottom: 4px;">Snap a photo in-store or drop candidate garment image here</p>
+            <p style="font-size: 0.78rem; color: var(--text-muted);">Supports mobile camera capture &amp; image files (JPG, PNG, WEBP)</p>
+          </div>
+
+          <!-- Live Webcam Capture -->
+          <div id="evalCameraArea" class="camera-box">
+            <video id="evalCameraStream" autoplay playsinline muted></video>
+            <button type="button" id="btnEvalCapturePhoto" class="btn btn-sm btn-primary">Capture Candidate Frame</button>
+          </div>
+
+          <!-- Candidate Preview -->
+          <div id="evalPreviewContainer" class="preview-container">
+            <img id="evalImagePreview" src="" alt="Candidate garment preview" />
+          </div>
+
+          <!-- Evaluation Results Section -->
+          <div id="evalResultsSection" class="eval-results-wrap" aria-live="polite">
+            <div class="eval-verdict-banner">
+              <div style="flex: 1; min-width: 240px;">
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                  <span id="evalDecisionBadge" class="eval-badge decision-buy">BUY</span>
+                  <div id="evalCandidateMeta" class="metadata-pills"></div>
+                </div>
+                <p id="evalDecisionSummary" class="eval-summary-text"></p>
+              </div>
+              <div class="eval-metric-box">
+                <div id="evalOutfitCount" class="eval-metric-value">0</div>
+                <div class="eval-metric-label">Outfit Potential</div>
+              </div>
+            </div>
+
+            <!-- Similarity / Redundancy Alert -->
+            <div id="evalRedundancyAlert" class="eval-redundancy-alert not-redundant">
+              <span id="evalRedundancyIcon">✓</span>
+              <span id="evalRedundancyText">No redundant duplicates detected in your current closet.</span>
+            </div>
+
+            <!-- Top 3 Outfits -->
+            <div>
+              <div class="manifest-heading" style="margin-bottom: 10px;">
+                Top 3 Outfits with Your Existing Closet
+              </div>
+              <div id="evalTopOutfitsGrid" class="eval-outfits-grid"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" data-close="evaluatorModal">Close</button>
+          <button type="submit" id="btnSubmitEvaluation" class="btn btn-primary">
+            ✦ Evaluate Purchase
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Modal 4: Gemini API Key Settings (Optional Local Override)
        ===================================================================== -->
   <div class="modal-backdrop" id="apiKeyModal" role="dialog" aria-modal="true" aria-labelledby="apiKeyModalTitle">
     <div class="modal-dialog">

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Outfit Lookbook — Smart Closet & Style Engine</title>
+  <title>Outfit Lookbook — Smart Closet &amp; Style Engine</title>
   <!-- Editorial Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -65,20 +65,22 @@
       </div>
     </section>
 
-    <!-- Vibe / Season Selector Bar -->
+    <!-- Vibe / Season Selector Bar (Issue Fix 1: Standardized Vibe Filtering) -->
     <section class="vibe-selector-bar" aria-label="Styling Vibe Controls">
       <div>
         <div style="font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 8px;">
-          Select Styling Direction / Vibe
+          Select Styling Direction / Vibe (Click to Filter or Toggle)
         </div>
         <div class="vibe-pills" id="vibePills">
-          <button type="button" class="vibe-pill active" data-vibe="Editorial Mix">Editorial Mix</button>
-          <button type="button" class="vibe-pill" data-vibe="Minimalist">Minimalist</button>
-          <button type="button" class="vibe-pill" data-vibe="Casual">Casual</button>
-          <button type="button" class="vibe-pill" data-vibe="Layered">Layered</button>
-          <button type="button" class="vibe-pill" data-vibe="Workwear">Workwear</button>
+          <button type="button" class="vibe-pill active" data-vibe="All">All</button>
           <button type="button" class="vibe-pill" data-vibe="Streetwear">Streetwear</button>
+          <button type="button" class="vibe-pill" data-vibe="Casual">Casual</button>
+          <button type="button" class="vibe-pill" data-vibe="Smart Casual">Smart Casual</button>
+          <button type="button" class="vibe-pill" data-vibe="Minimalist">Minimalist</button>
           <button type="button" class="vibe-pill" data-vibe="Formal">Formal</button>
+          <button type="button" class="vibe-pill" data-vibe="Athleisure">Athleisure</button>
+          <button type="button" class="vibe-pill" data-vibe="Workwear">Workwear</button>
+          <button type="button" class="vibe-pill" data-vibe="Layered">Layered</button>
         </div>
       </div>
 
@@ -90,7 +92,24 @@
     <!-- Lookbook Collection Grid -->
     <section id="lookbookGrid" class="lookbook-grid" aria-live="polite"></section>
 
-    <!-- Empty Lookbook State -->
+    <!-- Empty Filter State (Issue Fix 1: When no outfits match a selected vibe tag) -->
+    <div id="emptyVibeFilter" class="empty-state" style="display: none;">
+      <div class="empty-state-icon">🏷️</div>
+      <h2 class="empty-state-title" id="emptyVibeTitle">No outfits generated under this aesthetic</h2>
+      <p class="empty-state-copy" id="emptyVibeCopy">
+        None of the currently saved lookbook outfits match this vibe filter. You can display all outfits or synthesize new looks tailored to this styling direction.
+      </p>
+      <div class="empty-state-actions">
+        <button type="button" id="btnResetVibeFilter" class="btn btn-outline">
+          Show All Outfits
+        </button>
+        <button type="button" id="btnGenerateForVibe" class="btn btn-primary">
+          ✦ Synthesize Outfits for This Vibe
+        </button>
+      </div>
+    </div>
+
+    <!-- Empty Lookbook State (When 0 outfits exist in database) -->
     <div id="emptyLookbook" class="empty-state" style="display: none;">
       <div class="empty-state-icon">✨</div>
       <h2 class="empty-state-title">No Lookbook Combinations Generated Yet</h2>
