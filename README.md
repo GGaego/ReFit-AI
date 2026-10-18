@@ -1,4 +1,4 @@
-# Smart Closet & Style Engine (Gemini 2.5 Flash) — Argon 4 Release
+# Smart Closet & Style Engine (Gemini 2.5 Flash) 
 
 ## Overview & Key Features
 
