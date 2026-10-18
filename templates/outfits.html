@@ -49,7 +49,7 @@
           AI Curated <span class="serif-italic">Seasonal Lookbook</span>
         </h1>
         <p class="editorial-subcopy">
-          Gemini 2.5 Flash synthesizes your personal wardrobe catalog into cohesive ensembles—balancing silhouette proportions, tonal palettes, and layering depth.
+          Gemini 2.5 Flash synthesizes your personal wardrobe catalog into cohesive ensembles—balancing silhouette proportions, tonal palettes, and layering depth. Bookmark your favorite looks to preserve them across generations.
         </p>
       </div>
 
@@ -62,13 +62,17 @@
           <span class="telemetry-value" id="statLookCount">0</span>
           <span class="telemetry-label">Curated Looks</span>
         </div>
+        <div class="telemetry-item">
+          <span class="telemetry-value" id="statSavedCount">0</span>
+          <span class="telemetry-label">Saved Archive</span>
+        </div>
       </div>
     </section>
 
-    <!-- Vibe / Season Selector Bar (Issue Fix 1: Standardized Vibe Filtering) -->
+    <!-- Vibe / Season Selector Bar -->
     <section class="vibe-selector-bar" aria-label="Styling Vibe Controls">
       <div>
-        <div style="font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 8px;">
+        <div class="vibe-selector-label">
           Select Styling Direction / Vibe (Click to Filter or Toggle)
         </div>
         <div class="vibe-pills" id="vibePills">
@@ -89,10 +93,35 @@
       </button>
     </section>
 
+    <!-- Insufficiency Feedback Banner (Shown when requested vibe is not possible with current wardrobe) -->
+    <section
+      id="vibeInsufficiencyBanner"
+      class="insufficiency-banner"
+      role="alert"
+      aria-live="assertive"
+      style="display: none;"
+    >
+      <div class="insufficiency-banner-content">
+        <span class="insufficiency-banner-icon" aria-hidden="true">⚠️</span>
+        <div class="insufficiency-banner-text-group">
+          <span class="insufficiency-banner-kicker">Wardrobe Synthesis Advisory</span>
+          <p id="vibeInsufficiencyMessage" class="insufficiency-banner-message">
+            ⚠️ Not Possible: Your closet currently lacks the foundational pieces required for this aesthetic.
+          </p>
+        </div>
+      </div>
+      <div class="insufficiency-banner-actions">
+        <a href="/" class="btn btn-outline btn-sm">+ Add Missing Pieces</a>
+        <button type="button" id="btnDismissInsufficiency" class="btn btn-ghost btn-sm" aria-label="Dismiss notice">
+          Dismiss ✕
+        </button>
+      </div>
+    </section>
+
     <!-- Lookbook Collection Grid -->
     <section id="lookbookGrid" class="lookbook-grid" aria-live="polite"></section>
 
-    <!-- Empty Filter State (Issue Fix 1: When no outfits match a selected vibe tag) -->
+    <!-- Empty Filter State (When no outfits match a selected vibe tag) -->
     <div id="emptyVibeFilter" class="empty-state" style="display: none;">
       <div class="empty-state-icon">🏷️</div>
       <h2 class="empty-state-title" id="emptyVibeTitle">No outfits generated under this aesthetic</h2>

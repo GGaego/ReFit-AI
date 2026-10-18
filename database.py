@@ -173,10 +173,18 @@ def init_db() -> None:
                 item_ids TEXT NOT NULL,
                 styling_notes TEXT DEFAULT '',
                 vibe TEXT DEFAULT 'Casual',
+                is_saved INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+
+        # Ensure `is_saved` column exists on legacy `outfits` tables
+        outfit_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(outfits)").fetchall()
+        }
+        if "is_saved" not in outfit_cols:
+            conn.execute("ALTER TABLE outfits ADD COLUMN is_saved INTEGER DEFAULT 0")
 
         # Issue 1: Remove any programmatically generated studio capsule SVG records on initialization
         conn.execute(
@@ -189,7 +197,7 @@ def init_db() -> None:
             if norm_cat != r["category"]:
                 conn.execute("UPDATE clothes SET category = ? WHERE id = ?", (norm_cat, r["id"]))
 
-        outfit_rows = conn.execute("SELECT id, outfit_name, styling_notes, vibe FROM outfits").fetchall()
+        outfit_rows = conn.execute("SELECT id, outfit_name, styling_notes, vibe, is_saved FROM outfits").fetchall()
         for idx, r in enumerate(outfit_rows):
             current_vibe = (r["vibe"] or "").strip()
             if not current_vibe or current_vibe.lower() == "editorial mix":
@@ -199,6 +207,8 @@ def init_db() -> None:
                 norm_v = normalize_vibe(current_vibe, default="Casual")
                 if norm_v != current_vibe:
                     conn.execute("UPDATE outfits SET vibe = ? WHERE id = ?", (norm_v, r["id"]))
+            if r["is_saved"] is None:
+                conn.execute("UPDATE outfits SET is_saved = 0 WHERE id = ?", (r["id"],))
 
         conn.commit()
 
@@ -394,6 +404,7 @@ def get_hydrated_outfits() -> List[Dict[str, Any]]:
                     "items": items,
                     "styling_notes": record.get("styling_notes", ""),
                     "vibe": outfit_vibe,
+                    "is_saved": bool(record.get("is_saved", 0)),
                     "created_at": record.get("created_at"),
                 }
             )
@@ -412,7 +423,7 @@ def save_generated_outfits(
     )
     with get_connection() as conn:
         if replace_existing:
-            conn.execute("DELETE FROM outfits")
+            conn.execute("DELETE FROM outfits WHERE is_saved = 0 OR is_saved IS NULL")
         for idx, outfit in enumerate(generated_list):
             item_vibe_raw = outfit.get("vibe")
             if item_vibe_raw and str(item_vibe_raw).lower() not in ("all", "editorial mix"):
@@ -426,8 +437,8 @@ def save_generated_outfits(
 
             conn.execute(
                 """
-                INSERT INTO outfits (outfit_name, item_ids, styling_notes, vibe)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO outfits (outfit_name, item_ids, styling_notes, vibe, is_saved)
+                VALUES (?, ?, ?, ?, 0)
                 """,
                 (
                     outfit.get("outfit_name", "Curated Archival Look"),
@@ -438,6 +449,38 @@ def save_generated_outfits(
             )
         conn.commit()
     return get_hydrated_outfits()
+
+
+def toggle_save_outfit(outfit_id: int) -> Optional[Dict[str, Any]]:
+    """Toggle the `is_saved` bookmark flag (0 <-> 1) for a specific outfit and return the hydrated record."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE outfits SET is_saved = 1 - COALESCE(is_saved, 0) WHERE id = ?",
+            (outfit_id,),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute("SELECT * FROM outfits WHERE id = ?", (outfit_id,)).fetchone()
+
+    hydrated = get_hydrated_outfits()
+    matched = next((o for o in hydrated if o["id"] == outfit_id), None)
+    if matched is not None:
+        return matched
+
+    if row is not None:
+        record = dict(row)
+        return {
+            "id": record["id"],
+            "outfit_name": record["outfit_name"],
+            "item_ids": json.loads(record.get("item_ids") or "[]"),
+            "items": [],
+            "styling_notes": record.get("styling_notes", ""),
+            "vibe": normalize_vibe(record.get("vibe"), default="Casual"),
+            "is_saved": bool(record.get("is_saved", 0)),
+            "created_at": record.get("created_at"),
+        }
+    return None
 
 
 def delete_outfit(outfit_id: int) -> bool:

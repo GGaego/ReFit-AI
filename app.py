@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from flask import (
     Flask,
+    Response,
     request,
     jsonify,
     render_template,
@@ -46,6 +47,17 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif", "svg"}
 GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+PLACEHOLDER_GARMENT_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 375" width="300" height="375">
+  <rect width="300" height="375" fill="#F3F4F6"/>
+  <rect x="18" y="18" width="264" height="339" rx="6" fill="none" stroke="#E4E4E7" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <g transform="translate(150, 165)" fill="none" stroke="#8E8E98" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M0 -38 C8 -38 12 -32 12 -26 C12 -20 6 -16 0 -13 L-58 20 C-64 23 -62 32 -54 32 L54 32 C62 32 64 23 58 20 L0 -13"/>
+    <path d="M-38 32 L-38 62 L38 62 L38 32"/>
+  </g>
+  <text x="150" y="268" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" fill="#52525B" letter-spacing="1.5">ARCHIVE GARMENT</text>
+  <text x="150" y="286" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#8E8E98" letter-spacing="1">IMAGE PLACEHOLDER</text>
+</svg>"""
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
@@ -121,23 +133,33 @@ Guidelines:
 1. Every outfit MUST consist of at least:
    - 1 Top + 1 Bottom (or 1 full-body piece from "One-Piece / Dresses")
    - Optional: Outerwear (jackets, coats), Footwear, and Accessories if available in the closet.
-2. Ensure silhouette harmony (e.g., pairing slim tops with baggy pants, or balanced boxy proportions).
-3. Ensure color coordination (monochromatic, complementary, earth tones, tonal matching).
-4. Do not reuse the exact same combination of top + bottom across multiple outfits unless layered distinctly.
-5. Provide a witty, creative title for each outfit.
-6. Every outfit MUST include an explicit `vibe` tag matching one of the standardized styling options:
+2. When a specific vibe is requested, verify whether the closet inventory contains items that credibly form at least one outfit in that aesthetic (minimum 1 Top + 1 Bottom, or 1 One-Piece). If not feasible, set `"possible": false`, return `"outfits": []`, and specify what pieces are missing in `"message"`.
+3. Ensure silhouette harmony (e.g., pairing slim tops with baggy pants, or balanced boxy proportions).
+4. Ensure color coordination (monochromatic, complementary, earth tones, tonal matching).
+5. Do not reuse the exact same combination of top + bottom across multiple outfits unless layered distinctly.
+6. Provide a witty, creative title for each outfit.
+7. Every outfit MUST include an explicit `vibe` tag matching one of the standardized styling options:
    "Streetwear", "Casual", "Smart Casual", "Minimalist", "Formal", "Athleisure", "Workwear", or "Layered".
 
-Output JSON Format:
+Output JSON Format (when outfits are possible):
 {
+  "possible": true,
+  "message": "Successfully curated outfits for Streetwear.",
   "outfits": [
     {
       "outfit_name": "string (creative, memorable outfit name)",
       "vibe": "string (Streetwear | Casual | Smart Casual | Minimalist | Formal | Athleisure | Workwear | Layered)",
-      "item_ids": [101, 104, 112],
+      "item_ids": [1, 2],
       "styling_notes": "string (1-2 sentences on why this works and how to wear it)"
     }
   ]
+}
+
+Or if the closet cannot support that style:
+{
+  "possible": false,
+  "message": "Insufficient wardrobe foundation: Unable to synthesize a Streetwear outfit. Missing relaxed tops or complementary bottoms.",
+  "outfits": []
 }"""
 
 PURCHASE_EVALUATOR_SYSTEM_PROMPT = """You are an expert personal wardrobe strategist and smart shopping advisor.
@@ -387,18 +409,305 @@ def analyze_garment_with_gemini(
 
 
 # ---------------------------------------------------------------------------
-# Outfit Generation & Vibe Tagging
+# Outfit Generation, Vibe Insufficiency Detection & Vibe Tagging
 # ---------------------------------------------------------------------------
+
+def _garment_blob(item: Dict[str, Any]) -> str:
+    """Combine garment metadata fields into a single lowercase searchable text string."""
+    return " ".join(
+        str(item.get(k) or "")
+        for k in ("type", "name", "category", "color", "fit", "description", "style_notes")
+    ).lower()
+
+
+def evaluate_vibe_sufficiency(
+    inventory: List[Dict[str, Any]],
+    vibe: str = "All",
+) -> Tuple[bool, str, List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Verify whether the current closet inventory can credibly satisfy the requested vibe.
+    Requires at least (1 Top + 1 Bottom) or (1 One-Piece / Dresses), plus aesthetic
+    compatibility when a specific vibe is requested.
+    Returns (possible, explanation_message, compatible_tops, compatible_bottoms, compatible_one_pieces).
+    """
+    tops = [i for i in inventory if database.normalize_category(i.get("category")) == "Tops"]
+    bottoms = [i for i in inventory if database.normalize_category(i.get("category")) == "Bottoms"]
+    one_pieces = [i for i in inventory if database.normalize_category(i.get("category")) == "One-Piece / Dresses"]
+    outerwear = [i for i in inventory if database.normalize_category(i.get("category")) == "Outerwear"]
+
+    is_specific = bool(vibe and vibe.strip().lower() not in ("all", "editorial mix"))
+    target_vibe = database.normalize_vibe(vibe, default="Casual") if is_specific else None
+    vibe_label = target_vibe or "cohesive"
+
+    # 1. Foundational piece check: minimum (1 Top + 1 Bottom) or (1 One-Piece)
+    if (not tops or not bottoms) and not one_pieces:
+        if not tops and not bottoms:
+            missing_desc = "tops and bottoms (or a one-piece dress)"
+        elif not tops:
+            missing_desc = "tops (or a one-piece dress) to pair with your bottoms"
+        else:
+            missing_desc = "bottoms (or a one-piece dress) to pair with your tops"
+
+        if target_vibe:
+            msg = (
+                f"Insufficient wardrobe foundation: Unable to synthesize a {target_vibe} outfit. "
+                f"Missing {missing_desc}."
+            )
+        else:
+            msg = (
+                f"Insufficient wardrobe foundation: Unable to synthesize outfits. "
+                f"Missing {missing_desc}."
+            )
+        return False, msg, [], [], []
+
+    if not target_vibe:
+        return True, "Successfully curated lookbook combinations.", tops, bottoms, one_pieces
+
+    # 2. Vibe-specific compatibility rules
+    formal_kw = [
+        "formal", "tailor", "suit", "blazer", "tuxedo", "dress shirt", "poplin", "oxford",
+        "button-up", "button up", "button-down", "button down", "trouser", "slack", "pleat",
+        "gown", "evening", "silk", "satin", "sartorial", "structured", "loafer", "derby",
+        "heel", "slip dress", "midi dress", "trench", "overcoat", "wool coat", "refined", "polished",
+    ]
+    strictly_casual_sport_kw = [
+        "hoodie", "sweatpant", "jogger", "gym", "athletic", "cargo", "graphic tee",
+        "tank top", "boardshort", "fleece", "distressed", "ripped", "track", "sweatshirt",
+    ]
+    athleisure_kw = [
+        "athleisure", "athletic", "sport", "lounge", "gym", "hoodie", "crewneck", "sweatpant",
+        "jogger", "legging", "fleece", "track", "runner", "sneaker", "windbreaker", "zip",
+        "tee", "t-shirt", "tank", "short", "active", "jersey", "sweatshirt",
+    ]
+    strictly_formal_kw = [
+        "tuxedo", "evening gown", "ball gown", "three-piece suit", "tailcoat", "stiletto",
+    ]
+    workwear_kw = [
+        "work", "chore", "utility", "utilitarian", "canvas", "denim", "jean", "selvedge",
+        "cargo", "chino", "carpenter", "twill", "flannel", "overshirt", "jacket", "coat",
+        "boot", "heavyweight", "rugged", "heritage", "olive", "tobacco", "brown", "khaki",
+        "tan", "charcoal", "boxy",
+    ]
+    streetwear_kw = [
+        "street", "urban", "skate", "grunge", "vintage", "archive", "oversized", "boxy",
+        "relaxed", "baggy", "wide", "straight", "hoodie", "crewneck", "tee", "t-shirt",
+        "sweater", "knit", "bomber", "work jacket", "jacket", "cargo", "jean", "denim",
+        "sweatpant", "jogger", "sneaker", "loafer", "boot", "cap", "beanie",
+    ]
+    smart_casual_kw = [
+        "smart", "elevated", "preppy", "tailor", "button", "shirt", "poplin", "oxford",
+        "knit", "sweater", "cardigan", "polo", "blazer", "coat", "trench", "jacket",
+        "trouser", "chino", "jean", "denim", "selvedge", "dress", "skirt", "loafer",
+        "derby", "boot", "clean", "minimal", "structured",
+    ]
+
+    if target_vibe == "Formal":
+        compat_tops = [
+            t for t in tops
+            if any(k in _garment_blob(t) for k in formal_kw)
+            or (
+                not any(k in _garment_blob(t) for k in strictly_casual_sport_kw)
+                and any(k in _garment_blob(t) for k in ["shirt", "blouse", "knit", "sweater", "turtleneck", "polo"])
+            )
+        ]
+        compat_bottoms = [
+            b for b in bottoms
+            if any(k in _garment_blob(b) for k in formal_kw)
+            or (
+                not any(k in _garment_blob(b) for k in strictly_casual_sport_kw + ["jean", "denim", "short"])
+                and any(k in _garment_blob(b) for k in ["trouser", "pant", "skirt", "chino", "tailor", "slim", "straight"])
+            )
+        ]
+        compat_op = [
+            op for op in one_pieces
+            if not any(k in _garment_blob(op) for k in strictly_casual_sport_kw)
+        ]
+        has_formal_anchor = any(
+            any(k in _garment_blob(it) for k in formal_kw)
+            for it in (compat_tops + compat_bottoms + compat_op + outerwear)
+        )
+        if ((not compat_tops or not compat_bottoms) and not compat_op) or not has_formal_anchor:
+            missing_parts = []
+            if not compat_tops and not compat_op:
+                missing_parts.append("formal tops (e.g., button-up shirts, silk blouses, or fine knits)")
+            if not compat_bottoms and not compat_op:
+                missing_parts.append("tailored bottoms (e.g., trousers or dress slacks)")
+            if not missing_parts:
+                missing_parts.append("formal tops and tailored bottoms")
+            return (
+                False,
+                f"Cannot synthesize a Formal look: Your closet lacks {' and '.join(missing_parts)}.",
+                [],
+                [],
+                [],
+            )
+        return True, "Successfully curated outfits for Formal.", compat_tops, compat_bottoms, compat_op
+
+    if target_vibe == "Athleisure":
+        compat_tops = [
+            t for t in tops
+            if any(k in _garment_blob(t) for k in athleisure_kw)
+            or not any(k in _garment_blob(t) for k in strictly_formal_kw + ["dress shirt", "poplin", "oxford", "silk"])
+        ]
+        compat_bottoms = [
+            b for b in bottoms
+            if any(k in _garment_blob(b) for k in athleisure_kw)
+        ]
+        compat_op = [
+            op for op in one_pieces
+            if any(k in _garment_blob(op) for k in athleisure_kw)
+        ]
+        has_athleisure_anchor = any(
+            any(k in _garment_blob(it) for k in athleisure_kw)
+            for it in inventory
+        )
+        if ((not compat_tops or not compat_bottoms) and not compat_op) or not has_athleisure_anchor:
+            missing_parts = []
+            if not compat_tops:
+                missing_parts.append("sporty or relaxed tops (hoodies, crewnecks, tees)")
+            if not compat_bottoms:
+                missing_parts.append("athletic or lounge bottoms (sweatpants, joggers, shorts, leggings)")
+            if not missing_parts:
+                missing_parts.append("sporty tops and lounge-ready bottoms")
+            return (
+                False,
+                f"Insufficient wardrobe foundation: Unable to synthesize an Athleisure outfit. Missing {' and '.join(missing_parts)}.",
+                [],
+                [],
+                [],
+            )
+        return True, "Successfully curated outfits for Athleisure.", compat_tops, compat_bottoms, compat_op
+
+    if target_vibe == "Layered":
+        layering_tops = [
+            t for t in tops
+            if any(k in _garment_blob(t) for k in ["knit", "sweater", "cardigan", "hoodie", "crewneck", "overshirt", "flannel", "vest", "shirt"])
+        ]
+        can_layer = len(outerwear) >= 1 or (len(tops) >= 2 and len(layering_tops) >= 1)
+        if not can_layer:
+            return (
+                False,
+                "Insufficient wardrobe foundation: Unable to synthesize a Layered outfit. Missing outerwear (jackets, coats) or layerable mid-layers.",
+                [],
+                [],
+                [],
+            )
+        return True, "Successfully curated outfits for Layered.", tops, bottoms, one_pieces
+
+    if target_vibe == "Workwear":
+        compat_tops = [
+            t for t in tops
+            if not any(k in _garment_blob(t) for k in strictly_formal_kw)
+        ]
+        compat_bottoms = [
+            b for b in bottoms
+            if any(k in _garment_blob(b) for k in ["jean", "denim", "cargo", "chino", "carpenter", "twill", "work", "pant", "trouser"])
+            and not any(k in _garment_blob(b) for k in strictly_formal_kw + ["legging", "gym short"])
+        ]
+        compat_op = [
+            op for op in one_pieces
+            if any(k in _garment_blob(op) for k in ["jumpsuit", "overall", "work", "denim", "canvas", "utility"])
+        ]
+        has_workwear_piece = any(
+            any(k in _garment_blob(it) for k in workwear_kw)
+            for it in (compat_tops + compat_bottoms + compat_op + outerwear)
+        )
+        if ((not compat_tops or not compat_bottoms) and not compat_op) or not has_workwear_piece:
+            return (
+                False,
+                "Insufficient wardrobe foundation: Unable to synthesize a Workwear outfit. Missing utility outerwear, rugged tops, or structured workwear bottoms (denim, cargos, chinos).",
+                [],
+                [],
+                [],
+            )
+        return True, "Successfully curated outfits for Workwear.", compat_tops, compat_bottoms, compat_op
+
+    if target_vibe == "Streetwear":
+        compat_tops = [
+            t for t in tops
+            if any(k in _garment_blob(t) for k in streetwear_kw)
+            or not any(k in _garment_blob(t) for k in strictly_formal_kw)
+        ]
+        compat_bottoms = [
+            b for b in bottoms
+            if any(k in _garment_blob(b) for k in streetwear_kw)
+            or not any(k in _garment_blob(b) for k in strictly_formal_kw)
+        ]
+        has_street_anchor = any(
+            any(k in _garment_blob(it) for k in streetwear_kw)
+            for it in inventory
+        )
+        if not compat_tops or not compat_bottoms or not has_street_anchor:
+            return (
+                False,
+                "Insufficient wardrobe foundation: Unable to synthesize a Streetwear outfit. Missing relaxed tops or complementary streetwear bottoms.",
+                [],
+                [],
+                [],
+            )
+        return True, "Successfully curated outfits for Streetwear.", compat_tops, compat_bottoms, one_pieces
+
+    if target_vibe == "Smart Casual":
+        compat_tops = [
+            t for t in tops
+            if any(k in _garment_blob(t) for k in smart_casual_kw)
+            or not any(k in _garment_blob(t) for k in ["gym", "graphic tee", "tank top"])
+        ]
+        compat_bottoms = [
+            b for b in bottoms
+            if any(k in _garment_blob(b) for k in smart_casual_kw)
+            and not any(k in _garment_blob(b) for k in ["sweatpant", "jogger", "gym", "athletic"])
+        ]
+        compat_op = [
+            op for op in one_pieces
+            if not any(k in _garment_blob(op) for k in ["gym", "athletic"])
+        ]
+        has_smart_anchor = any(
+            any(k in _garment_blob(it) for k in smart_casual_kw)
+            for it in (compat_tops + compat_bottoms + compat_op + outerwear)
+        )
+        if ((not compat_tops or not compat_bottoms) and not compat_op) or not has_smart_anchor:
+            return (
+                False,
+                "Insufficient wardrobe foundation: Unable to synthesize a Smart Casual outfit. Missing elevated tops or tailored/denim bottoms.",
+                [],
+                [],
+                [],
+            )
+        return True, "Successfully curated outfits for Smart Casual.", compat_tops, compat_bottoms, compat_op
+
+    # Minimalist / Casual
+    return True, f"Successfully curated outfits for {vibe_label}.", tops, bottoms, one_pieces
+
 
 def generate_outfits_with_gemini(
     inventory: List[Dict[str, Any]],
     vibe: str = "All",
     api_key: Optional[str] = None
-) -> Tuple[List[Dict[str, Any]], str]:
+) -> Dict[str, Any]:
     """
     Send the user's wardrobe catalog JSON to Gemini 2.5 Flash to synthesize cohesive outfits.
-    Every outfit includes an explicit standardized `vibe` tag.
+    Returns a dict:
+    {
+      "possible": bool,
+      "message": str,
+      "outfits": List[Dict[str, Any]],
+      "engine": str
+    }
     """
+    is_specific_vibe = bool(vibe and vibe.strip().lower() not in ("all", "editorial mix"))
+    normalized_requested_vibe = database.normalize_vibe(vibe, default="Casual") if is_specific_vibe else None
+
+    # Pre-check foundational sufficiency (1 Top + 1 Bottom, or 1 One-Piece)
+    tops = [i for i in inventory if database.normalize_category(i.get("category")) == "Tops"]
+    bottoms = [i for i in inventory if database.normalize_category(i.get("category")) == "Bottoms"]
+    one_pieces = [i for i in inventory if database.normalize_category(i.get("category")) == "One-Piece / Dresses"]
+
+    if (not tops or not bottoms) and not one_pieces:
+        fallback_res = algorithmic_stylist_fallback(inventory, vibe)
+        fallback_res["engine"] = "algorithmic-stylist"
+        return fallback_res
+
     compact_inventory = [
         {
             "id": item["id"],
@@ -411,26 +720,26 @@ def generate_outfits_with_gemini(
         for item in inventory
     ]
 
-    is_specific_vibe = bool(vibe and vibe.strip().lower() not in ("all", "editorial mix"))
-    normalized_requested_vibe = database.normalize_vibe(vibe, default="Casual") if is_specific_vibe else None
-
     if is_specific_vibe:
         vibe_instruction = (
             f"\nRequested Styling Direction / Vibe: {normalized_requested_vibe}. "
-            f"Tailor the outfit combinations, layering choices, and titles toward '{normalized_requested_vibe}' "
-            f"and set `vibe` to '{normalized_requested_vibe}' (or closely matching standardized vibes if generating variety)."
+            f"First verify whether the closet inventory contains items that credibly form at least one "
+            f"'{normalized_requested_vibe}' outfit (minimum 1 Top + 1 Bottom, or 1 One-Piece). "
+            f"If NOT feasible, set `\"possible\": false`, `\"outfits\": []`, and explain what pieces are missing in `\"message\"`. "
+            f"If feasible, set `\"possible\": true` and tailor the outfit combinations, layering choices, and titles toward '{normalized_requested_vibe}' "
+            f"with `vibe` set to '{normalized_requested_vibe}'."
         )
     else:
         vibe_instruction = (
             "\nCreate a versatile range of 4 to 6 outfits across distinct standardized vibes "
             "(such as 'Streetwear', 'Casual', 'Smart Casual', 'Minimalist', 'Formal', 'Athleisure'). "
-            "Ensure each outfit object has its own explicit `vibe` field set to one of those standardized options."
+            "Set `\"possible\": true` and ensure each outfit object has its own explicit `vibe` field."
         )
 
     user_prompt = (
         f"Closet Inventory JSON:\n{json.dumps(compact_inventory, indent=2)}\n"
         f"{vibe_instruction}\n"
-        "Generate between 4 and 6 distinct, cohesive outfits in the exact output JSON schema."
+        "Return ONLY the strict output JSON schema with `possible`, `message`, and `outfits`."
     )
 
     if api_key and GENAI_SDK:
@@ -447,13 +756,7 @@ def generate_outfits_with_gemini(
                     ),
                 )
                 parsed = extract_json_payload(response.text)
-                outfits = validate_generated_outfits(
-                    parsed.get("outfits", []), inventory, default_vibe=normalized_requested_vibe
-                )
-                if outfits:
-                    return outfits, f"gemini ({GEMINI_MODEL_NAME})"
-
-            elif GENAI_SDK == "google-generativeai":
+            else:
                 legacy_genai.configure(api_key=api_key)
                 model = legacy_genai.GenerativeModel(
                     model_name=GEMINI_MODEL_NAME,
@@ -462,15 +765,37 @@ def generate_outfits_with_gemini(
                 )
                 response = model.generate_content(user_prompt)
                 parsed = extract_json_payload(response.text)
-                outfits = validate_generated_outfits(
-                    parsed.get("outfits", []), inventory, default_vibe=normalized_requested_vibe
-                )
-                if outfits:
-                    return outfits, f"gemini ({GEMINI_MODEL_NAME})"
+
+            if parsed.get("possible") is False:
+                return {
+                    "possible": False,
+                    "message": str(
+                        parsed.get("message")
+                        or f"Insufficient wardrobe foundation: Unable to synthesize a {normalized_requested_vibe or 'cohesive'} outfit."
+                    ).strip(),
+                    "outfits": [],
+                    "engine": f"gemini ({GEMINI_MODEL_NAME})",
+                }
+
+            outfits = validate_generated_outfits(
+                parsed.get("outfits", []), inventory, default_vibe=normalized_requested_vibe
+            )
+            if outfits:
+                return {
+                    "possible": True,
+                    "message": str(
+                        parsed.get("message")
+                        or f"Synthesized {len(outfits)} cohesive lookbook combinations."
+                    ).strip(),
+                    "outfits": outfits,
+                    "engine": f"gemini ({GEMINI_MODEL_NAME})",
+                }
         except Exception as exc:
             app.logger.warning(f"Gemini Outfit Stylist call failed, using algorithmic stylist fallback: {exc}")
 
-    return algorithmic_stylist_fallback(inventory, vibe), "algorithmic-stylist"
+    fallback_res = algorithmic_stylist_fallback(inventory, vibe)
+    fallback_res["engine"] = "algorithmic-stylist"
+    return fallback_res
 
 
 def validate_generated_outfits(
@@ -478,8 +803,11 @@ def validate_generated_outfits(
     inventory: List[Dict[str, Any]],
     default_vibe: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Filter out invalid item IDs and ensure each outfit has at least 2 valid pieces and a standardized vibe."""
-    valid_ids = {item["id"] for item in inventory}
+    """
+    Filter out invalid item IDs and ensure each outfit has a valid foundational structure
+    (at least 1 Top + 1 Bottom, or 1 One-Piece) and a standardized vibe.
+    """
+    items_by_id = {item["id"]: item for item in inventory}
     cleaned = []
     for idx, o in enumerate(raw_outfits):
         if not isinstance(o, dict):
@@ -490,63 +818,72 @@ def validate_generated_outfits(
                 if isinstance(raw_id, str) and raw_id.startswith("item_"):
                     raw_id = raw_id.replace("item_", "")
                 num_id = int(raw_id)
-                if num_id in valid_ids and num_id not in ids:
+                if num_id in items_by_id and num_id not in ids:
                     ids.append(num_id)
             except (ValueError, TypeError):
                 continue
-        if len(ids) >= 2:
-            outfit_name = str(o.get("outfit_name") or "Curated Archival Look").strip()
-            styling_notes = str(
-                o.get("styling_notes")
-                or "Balanced silhouette proportions pairing complementary textures and grounded tonal hues."
-            ).strip()
-            raw_vibe = o.get("vibe")
-            if raw_vibe and str(raw_vibe).strip().lower() not in ("all", "editorial mix"):
-                vibe_tag = database.normalize_vibe(str(raw_vibe), default=default_vibe or "Casual")
-            elif default_vibe:
-                vibe_tag = default_vibe
-            else:
-                vibe_tag = database.infer_vibe_from_outfit_text(outfit_name, styling_notes, idx)
 
-            cleaned.append({
-                "outfit_name": outfit_name,
-                "vibe": vibe_tag,
-                "item_ids": ids,
-                "styling_notes": styling_notes,
-            })
+        if len(ids) < 1:
+            continue
+
+        categories_in_outfit = {
+            database.normalize_category(items_by_id[i].get("category"))
+            for i in ids
+        }
+        has_foundation = (
+            ("Tops" in categories_in_outfit and "Bottoms" in categories_in_outfit)
+            or ("One-Piece / Dresses" in categories_in_outfit and len(ids) >= 1)
+        )
+        if not has_foundation:
+            continue
+
+        outfit_name = str(o.get("outfit_name") or "Curated Archival Look").strip()
+        styling_notes = str(
+            o.get("styling_notes")
+            or "Balanced silhouette proportions pairing complementary textures and grounded tonal hues."
+        ).strip()
+        raw_vibe = o.get("vibe")
+        if raw_vibe and str(raw_vibe).strip().lower() not in ("all", "editorial mix"):
+            vibe_tag = database.normalize_vibe(str(raw_vibe), default=default_vibe or "Casual")
+        elif default_vibe:
+            vibe_tag = default_vibe
+        else:
+            vibe_tag = database.infer_vibe_from_outfit_text(outfit_name, styling_notes, idx)
+
+        cleaned.append({
+            "outfit_name": outfit_name,
+            "vibe": vibe_tag,
+            "item_ids": ids,
+            "styling_notes": styling_notes,
+        })
     return cleaned
 
 
 def algorithmic_stylist_fallback(
     inventory: List[Dict[str, Any]],
     vibe: str = "All"
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Deterministic editorial stylist engine when Gemini API key is not configured.
-    Pairs tops + bottoms (or one-piece dresses) + optional outerwear, footwear, and accessories,
-    tagging every outfit with an explicit standardized vibe.
+    Verifies whether the requested vibe can be satisfied by the closet inventory.
+    If not possible, returns `{"possible": False, "message": "...", "outfits": []}`.
     """
-    tops = [i for i in inventory if database.normalize_category(i.get("category")) == "Tops"]
-    bottoms = [i for i in inventory if database.normalize_category(i.get("category")) == "Bottoms"]
-    one_pieces = [i for i in inventory if database.normalize_category(i.get("category")) == "One-Piece / Dresses"]
+    possible, reason_msg, compat_tops, compat_bottoms, compat_one_pieces = evaluate_vibe_sufficiency(
+        inventory, vibe=vibe
+    )
+    if not possible:
+        return {
+            "possible": False,
+            "message": reason_msg,
+            "outfits": [],
+        }
+
     outerwear = [i for i in inventory if database.normalize_category(i.get("category")) == "Outerwear"]
     footwear = [i for i in inventory if database.normalize_category(i.get("category")) == "Footwear"]
     accessories = [i for i in inventory if database.normalize_category(i.get("category")) == "Accessories"]
 
     is_specific_vibe = bool(vibe and vibe.strip().lower() not in ("all", "editorial mix"))
     target_vibe = database.normalize_vibe(vibe, default="Casual") if is_specific_vibe else None
-
-    if (not tops or not bottoms) and not one_pieces:
-        all_ids = [i["id"] for i in inventory]
-        if len(all_ids) < 2:
-            return []
-        assigned_vibe = target_vibe or "Casual"
-        return [{
-            "outfit_name": f"{assigned_vibe} Wardrobe Pairing",
-            "vibe": assigned_vibe,
-            "item_ids": all_ids[:min(4, len(all_ids))],
-            "styling_notes": "Cohesive studio combination balancing the textures and color tones currently cataloged in your wardrobe."
-        }]
 
     vibe_profiles = [
         ("Streetwear", "Concrete Volume & Proportion"),
@@ -611,11 +948,21 @@ def algorithmic_stylist_fallback(
     }
 
     base_combinations: List[List[Dict[str, Any]]] = []
-    for t in tops:
-        for b in bottoms:
+    for t in compat_tops:
+        for b in compat_bottoms:
             base_combinations.append([t, b])
-    for op in one_pieces:
+    for op in compat_one_pieces:
         base_combinations.append([op])
+
+    if not base_combinations:
+        return {
+            "possible": False,
+            "message": (
+                f"Insufficient wardrobe foundation: Unable to synthesize a {target_vibe or 'cohesive'} outfit "
+                "with your current closet inventory."
+            ),
+            "outfits": [],
+        }
 
     outfits = []
     max_outfits = min(len(base_combinations), 6)
@@ -629,13 +976,25 @@ def algorithmic_stylist_fallback(
             titles_list = specific_titles.get(outfit_vibe, specific_titles["Casual"])
             title = titles_list[idx % len(titles_list)]
         else:
-            outfit_vibe, title = vibe_profiles[idx % len(vibe_profiles)]
+            # Select only vibes that are actually feasible for this closet when cycling "All"
+            candidate_vibe, candidate_title = vibe_profiles[idx % len(vibe_profiles)]
+            v_ok, _, _, _, _ = evaluate_vibe_sufficiency(inventory, vibe=candidate_vibe)
+            if v_ok:
+                outfit_vibe, title = candidate_vibe, candidate_title
+            else:
+                outfit_vibe = "Casual"
+                title = specific_titles["Casual"][idx % len(specific_titles["Casual"])]
 
         if outerwear and (idx % 2 == 0 or outfit_vibe in ("Layered", "Workwear", "Streetwear", "Smart Casual")):
             outer = outerwear[idx % len(outerwear)]
             if outer["id"] not in chosen_ids:
                 chosen_ids.insert(0, outer["id"])
                 layers_desc.append(f"anchored by the {outer['color']} {outer['type']}")
+        elif outfit_vibe == "Layered" and len(compat_tops) >= 2:
+            extra_top = compat_tops[(idx + 1) % len(compat_tops)]
+            if extra_top["id"] not in chosen_ids:
+                chosen_ids.insert(0, extra_top["id"])
+                layers_desc.append(f"layered under the {extra_top['color']} {extra_top['type']}")
 
         if footwear:
             shoe = footwear[idx % len(footwear)]
@@ -671,7 +1030,16 @@ def algorithmic_stylist_fallback(
             "styling_notes": notes,
         })
 
-    return outfits
+    success_msg = (
+        f"Successfully curated {len(outfits)} outfit(s) for {target_vibe}."
+        if target_vibe
+        else f"Synthesized {len(outfits)} cohesive lookbook combinations."
+    )
+    return {
+        "possible": True,
+        "message": success_msg,
+        "outfits": outfits,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -924,60 +1292,60 @@ def fallback_evaluate_purchase(
     elif cand_cat == "Bottoms":
         total_outfit_count = len(tops) * max(1, len(outerwear) + 1)
     elif cand_cat == "Outerwear":
-        total_outfit_count = max(len(tops) * len(bottoms), len(tops) + len(bottoms) + len(one_pieces))
+        total_outfit_count = max(len(tops) * len(bottoms), (len(tops) * len(bottoms)) + len(one_pieces))
     elif cand_cat == "One-Piece / Dresses":
-        total_outfit_count = max(1, len(outerwear) + len(footwear))
+        total_outfit_count = max(1 if (outerwear or footwear) else 0, len(outerwear) + len(footwear))
     elif cand_cat == "Footwear":
-        total_outfit_count = max(len(tops) * len(bottoms), len(inventory) // 2)
+        total_outfit_count = (len(tops) * len(bottoms)) + len(one_pieces)
     else:  # Accessories
-        total_outfit_count = max(len(tops) * len(bottoms), len(inventory) // 2)
+        total_outfit_count = (len(tops) * len(bottoms)) + len(one_pieces)
 
     # Determine redundancy and BUY / THINK TWICE / PASS recommendation
     if len(similar_items) >= 2:
         is_redundant = True
         decision = "PASS"
-        matched_names = ", ".join(f"{i.get('color')} {i.get('type')}" for i in similar_items[:3])
+        matched_names = ", ".join(f"#{i.get('id')} {i.get('color')} {i.get('type')}" for i in similar_items[:3])
         redundancy_notes = (
             f"You already own {len(similar_items)} {cand_color_fam} {cand_cat.lower()} pieces "
             f"({matched_names}). Adding another creates high wardrobe overlap."
         )
         decision_summary = (
-            f"High redundancy alert: your closet already contains {len(similar_items)} very similar "
-            f"{cand['color']} {cand_cat.lower()} pieces. Pass on this purchase and shop your existing archive instead."
+            f"Smart textile preservation: your archive already contains {len(similar_items)} comparable "
+            f"{cand['color']} {cand_cat.lower()} pieces. Skip this purchase and rotate your existing pieces."
         )
     elif len(similar_items) == 1:
         is_redundant = True
         existing_match = similar_items[0]
         decision = "THINK TWICE"
         redundancy_notes = (
-            f"Closely overlaps with your existing {existing_match.get('color')} {existing_match.get('type')} "
-            f"(#{existing_match.get('id')})."
+            f"Closely overlaps with your existing #{existing_match.get('id')} {existing_match.get('color')} "
+            f"{existing_match.get('type')} ({existing_match.get('fit')} fit)."
         )
         decision_summary = (
-            f"While this {cand['color']} {cand_cat.lower()} piece can form {total_outfit_count} outfits, "
-            f"you already own a similar {existing_match.get('color')} {existing_match.get('type')}. "
-            f"Only buy if the {cand['fit']} silhouette offers a distinct upgrade."
+            f"While this {cand['color']} {cand_cat.lower()} piece unlocks {total_outfit_count} combinations, "
+            f"you already own #{existing_match.get('id')} {existing_match.get('color')} {existing_match.get('type')}. "
+            f"Only acquire if the {cand['fit']} cut serves a distinct styling role."
         )
     elif total_outfit_count == 0:
         is_redundant = False
         redundancy_notes = None
         decision = "THINK TWICE"
         decision_summary = (
-            f"No duplicates found, but your closet currently lacks complementary foundational pieces "
-            f"to build full outfits around this {cand['color']} {cand_cat.lower()} item."
+            f"Zero overlap detected, but your archive currently lacks complementary foundational garments "
+            f"to build complete looks around this {cand['color']} {cand_cat.lower()} piece."
         )
     else:
         is_redundant = False
         redundancy_notes = None
         decision = "BUY"
         gap_note = (
-            f"fills a {cand_cat.lower()} gap"
+            f"fills a {cand_cat.lower()} category gap"
             if len(same_cat_items) <= 1
-            else f"introduces a fresh {cand['color']} tone to your {cand_cat.lower()} rotation"
+            else f"introduces a distinct {cand['color']} nuance to your {cand_cat.lower()} rotation"
         )
         decision_summary = (
-            f"Strong wardrobe addition that {gap_note} and unlocks {total_outfit_count} cohesive outfit "
-            f"combinations with your existing pieces."
+            f"High-utility addition that {gap_note} and unlocks {total_outfit_count} cohesive outfit "
+            f"pairings across your existing wardrobe archive."
         )
 
     # Build Top 3 Outfits combining the candidate item with existing closet pieces
@@ -989,60 +1357,60 @@ def fallback_evaluate_purchase(
         f"Tonal Studio Archive Look",
     ]
 
-    for idx in range(3):
-        chosen: List[Dict[str, Any]] = []
-        if cand_cat == "Tops":
-            if bottoms:
-                chosen.append(bottoms[idx % len(bottoms)])
-            if outerwear and idx < len(outerwear):
-                chosen.append(outerwear[idx % len(outerwear)])
-            if footwear:
-                chosen.append(footwear[idx % len(footwear)])
-        elif cand_cat == "Bottoms":
-            if tops:
-                chosen.append(tops[idx % len(tops)])
-            if outerwear and idx < len(outerwear):
-                chosen.append(outerwear[idx % len(outerwear)])
-            if footwear:
-                chosen.append(footwear[idx % len(footwear)])
-        elif cand_cat == "Outerwear":
-            if tops:
-                chosen.append(tops[idx % len(tops)])
-            if bottoms:
-                chosen.append(bottoms[idx % len(bottoms)])
-            if footwear and idx % 2 == 0:
-                chosen.append(footwear[idx % len(footwear)])
-        else:
-            if tops:
-                chosen.append(tops[idx % len(tops)])
-            if bottoms:
-                chosen.append(bottoms[idx % len(bottoms)])
+    if total_outfit_count > 0:
+        for idx in range(3):
+            chosen: List[Dict[str, Any]] = []
+            if cand_cat == "Tops":
+                if bottoms:
+                    chosen.append(bottoms[idx % len(bottoms)])
+                if outerwear and idx < len(outerwear):
+                    chosen.append(outerwear[idx % len(outerwear)])
+                if footwear:
+                    chosen.append(footwear[idx % len(footwear)])
+            elif cand_cat == "Bottoms":
+                if tops:
+                    chosen.append(tops[idx % len(tops)])
+                if outerwear and idx < len(outerwear):
+                    chosen.append(outerwear[idx % len(outerwear)])
+                if footwear:
+                    chosen.append(footwear[idx % len(footwear)])
+            elif cand_cat == "Outerwear":
+                if tops and bottoms:
+                    chosen.append(tops[idx % len(tops)])
+                    chosen.append(bottoms[idx % len(bottoms)])
+                elif one_pieces:
+                    chosen.append(one_pieces[idx % len(one_pieces)])
+                if footwear and idx % 2 == 0:
+                    chosen.append(footwear[idx % len(footwear)])
+            else:
+                if tops and bottoms:
+                    chosen.append(tops[idx % len(tops)])
+                    chosen.append(bottoms[idx % len(bottoms)])
+                elif one_pieces:
+                    chosen.append(one_pieces[idx % len(one_pieces)])
 
-        # Deduplicate chosen items
-        unique_chosen = []
-        seen_ids = set()
-        for c_item in chosen:
-            if c_item["id"] not in seen_ids:
-                seen_ids.add(c_item["id"])
-                unique_chosen.append(c_item)
+            # Deduplicate chosen items
+            unique_chosen = []
+            seen_ids = set()
+            for c_item in chosen:
+                if c_item["id"] not in seen_ids:
+                    seen_ids.add(c_item["id"])
+                    unique_chosen.append(c_item)
 
-        if not unique_chosen and inventory:
-            unique_chosen = inventory[idx:idx + 2] or inventory[:2]
-
-        if unique_chosen:
-            names_str = " and ".join(f"{it.get('color')} {it.get('type')}" for it in unique_chosen)
-            top_outfits.append({
-                "title": title_sequence[idx % len(title_sequence)],
-                "vibe": vibe_sequence[idx % len(vibe_sequence)],
-                "existing_item_ids": [f"item_{it['id']}" for it in unique_chosen],
-                "existing_items": unique_chosen,
-                "styling_tips": (
-                    f"Pair this {cand['fit']} {cand['color']} candidate piece with your "
-                    f"{names_str} for balanced proportions."
-                ),
-            })
-            if len(inventory) < 3 and idx >= 0:
-                break
+            if unique_chosen:
+                names_str = " and ".join(f"{it.get('color')} {it.get('type')}" for it in unique_chosen)
+                top_outfits.append({
+                    "title": title_sequence[idx % len(title_sequence)],
+                    "vibe": vibe_sequence[idx % len(vibe_sequence)],
+                    "existing_item_ids": [f"item_{it['id']}" for it in unique_chosen],
+                    "existing_items": unique_chosen,
+                    "styling_tips": (
+                        f"Style this {cand['fit']} {cand['color']} candidate piece with your "
+                        f"{names_str} for balanced archival proportions."
+                    ),
+                })
+                if len(inventory) < 3 and idx >= 0:
+                    break
 
     return {
         "candidate_item": {
@@ -1151,6 +1519,12 @@ def index():
 def outfits_page():
     """Render Page 2: 'Outfit Lookbook' AI Recommendations."""
     return render_template("outfits.html")
+
+
+@app.route("/static/placeholder-garment.svg")
+def serve_placeholder_garment_svg():
+    """Serve clean editorial SVG placeholder for missing or failed garment thumbnails."""
+    return Response(PLACEHOLDER_GARMENT_SVG, mimetype="image/svg+xml")
 
 
 @app.route("/static/css/<path:filename>")
@@ -1529,38 +1903,66 @@ def api_get_outfits():
 def api_generate_outfits():
     """
     POST /api/generate-outfits
-    Query all closet items, construct payload for Gemini 2.5 Flash Stylist,
-    parse outfit IDs and explicit per-outfit vibe tags, persist to SQLite,
-    and return hydrated outfit data with image paths.
+    Query all closet items, verify whether the requested vibe is possible with the
+    current inventory, and if feasible, persist newly generated outfits while preserving
+    bookmarked (`is_saved = 1`) looks. If not possible, return `possible: False` with
+    existing outfits untouched.
     """
     api_key = get_active_api_key()
     payload = request.get_json(silent=True) or {}
     vibe = payload.get("vibe", "All")
 
     inventory = database.get_all_clothes()
-    if len(inventory) < 2:
-        return jsonify({
-            "error": "Add at least 2 garments (ideally 1 Top and 1 Bottom) to your wardrobe before generating outfits."
-        }), 400
-
-    generated_list, engine_used = generate_outfits_with_gemini(
+    result = generate_outfits_with_gemini(
         inventory=inventory,
         vibe=vibe,
         api_key=api_key,
     )
 
-    if not generated_list:
+    possible = bool(result.get("possible", False))
+    message = str(result.get("message") or "").strip()
+    generated_list = result.get("outfits") or []
+    engine_used = result.get("engine", "algorithmic-stylist")
+
+    if not possible or not generated_list:
         return jsonify({
-            "error": "Could not synthesize viable outfits from current inventory. Try adding at least 1 Top and 1 Bottom."
-        }), 400
+            "success": False,
+            "possible": False,
+            "message": message or f"Unable to synthesize outfits for {vibe}. Your closet lacks the necessary foundational pieces.",
+            "outfits": database.get_hydrated_outfits(),
+            "engine": engine_used,
+            "vibe": vibe,
+        }), 200
 
     hydrated = database.save_generated_outfits(generated_list, vibe=vibe, replace_existing=True)
     return jsonify({
+        "success": True,
+        "possible": True,
         "outfits": hydrated,
         "engine": engine_used,
         "vibe": vibe,
-        "message": f"Synthesized {len(hydrated)} cohesive lookbook combinations."
-    })
+        "message": message or f"Synthesized {len(generated_list)} cohesive lookbook combinations."
+    }), 200
+
+
+@app.route("/api/outfits/<int:outfit_id>/toggle-save", methods=["POST"])
+def api_toggle_save_outfit(outfit_id: int):
+    """
+    POST /api/outfits/<id>/toggle-save
+    Toggle persistent bookmark status (`is_saved`) for an outfit in SQLite.
+    """
+    updated = database.toggle_save_outfit(outfit_id)
+    if not updated:
+        return jsonify({"error": "Outfit not found."}), 404
+
+    is_saved = bool(updated.get("is_saved", False))
+    message = "Look saved to archive." if is_saved else "Look removed from saved archive."
+    return jsonify({
+        "id": outfit_id,
+        "is_saved": is_saved,
+        "outfit": updated,
+        "message": message,
+    }), 200
 
 
 @app.route("/api/outfits/<int:outfit_id>/wear", methods=["POST"])

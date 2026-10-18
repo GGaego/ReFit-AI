@@ -56,6 +56,18 @@ function normalizeCategoryName(rawCategory = "") {
   return "Unassigned";
 }
 
+function getColorFamily(colorName = "") {
+  const c = String(colorName || "").toLowerCase();
+  if (["black", "onyx", "espresso", "ebony", "jet"].some((w) => c.includes(w))) return "black";
+  if (["charcoal", "graphite", "slate", "grey", "gray", "heather", "ash", "silver"].some((w) => c.includes(w))) return "grey/charcoal";
+  if (["white", "ecru", "cream", "ivory", "bone", "chalk", "off-white"].some((w) => c.includes(w))) return "white/ecru";
+  if (["indigo", "navy", "blue", "cobalt", "denim", "sky", "ice blue"].some((w) => c.includes(w))) return "blue/indigo";
+  if (["olive", "green", "sage", "forest", "khaki", "moss", "drab"].some((w) => c.includes(w))) return "olive/green";
+  if (["brown", "tobacco", "tan", "camel", "cognac", "taupe", "beige", "chocolate"].some((w) => c.includes(w))) return "brown/tan";
+  if (["red", "maroon", "burgundy", "wine", "oxblood", "crimson", "pink"].some((w) => c.includes(w))) return "red/burgundy";
+  return c.trim() || "neutral";
+}
+
 function resolveColorHex(colorName = "") {
   const c = String(colorName || "").toLowerCase();
   if (c.includes("unassigned")) return "#D4D4D8";
@@ -228,7 +240,12 @@ function renderProductGrid() {
 
     card.innerHTML = `
       <div class="card-media">
-        <img src="${escapeHtml(item.image_url)}" alt="${escapeHtml(displayTitle)}" loading="lazy" />
+        <img
+          src="${escapeHtml(item.image_url)}"
+          alt="${escapeHtml(displayTitle)}"
+          loading="lazy"
+          onerror="this.onerror=null; this.src='/static/placeholder-garment.svg';"
+        />
         <div class="card-top-badges">
           <span class="sku-badge ${badgeUnassignedClass}">#${item.id} // ${escapeHtml(canonicalCat)}</span>
           <div class="worn-tracker-group">
@@ -328,11 +345,6 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-/**
- * Standardized Category Dropdown in Edit Mode (Inline & Modal).
- * When editing `category` inline, renders a controlled <select> restricted to
- * the 6 canonical system categories instead of a freeform text input.
- */
 function startInlineEdit(targetEl, itemId, field) {
   if (targetEl.querySelector("input, select")) return;
   const item = state.items.find((i) => i.id === Number(itemId));
@@ -460,10 +472,6 @@ async function markWornToday(itemId) {
   }
 }
 
-/**
- * Open Edit Modal with controlled canonical category <select>
- * and clean handling of "Unassigned" fallback values.
- */
 function openEditModal(itemId) {
   const item = state.items.find((i) => i.id === Number(itemId));
   if (!item) return;
@@ -611,9 +619,6 @@ function captureCameraFrame() {
   document.getElementById("cameraArea").style.display = "none";
 }
 
-/**
- * Upload handler with duplicate rejection handling and non-blocking fallback notice when AI tagging is unavailable.
- */
 async function handleUploadSubmit(e) {
   e.preventDefault();
   const submitBtn = document.getElementById("btnSubmitUpload");
@@ -801,21 +806,97 @@ function resolveClosetItemById(rawId) {
   return state.items.find((it) => it.id === numId) || null;
 }
 
+/**
+ * Find similar/overlapping items in the user's wardrobe for the Overlap Check panel.
+ * Checks explicit `#<id>` / `item_<id>` references in `redundancy_notes` first,
+ * then falls back to matching category + color family in `state.items`.
+ */
+function findOverlappingWardrobeItems(cand, redundancyNotes = "") {
+  const matched = [];
+  const seenIds = new Set();
+
+  // 1. Parse explicit item IDs mentioned in redundancy_notes (e.g., "#12" or "item_12")
+  const idRegex = /(?:#|item_)(\d+)/gi;
+  let match;
+  while ((match = idRegex.exec(String(redundancyNotes || ""))) !== null) {
+    const found = resolveClosetItemById(match[1]);
+    if (found && !seenIds.has(found.id)) {
+      seenIds.add(found.id);
+      matched.push(found);
+    }
+  }
+
+  // 2. Match items in the same canonical category and color family
+  const candCat = normalizeCategoryName(cand?.category || "");
+  const candColorFam = getColorFamily(cand?.color || "");
+  state.items.forEach((it) => {
+    if (seenIds.has(it.id)) return;
+    const itemCat = normalizeCategoryName(it.category);
+    const itemColorFam = getColorFamily(it.color);
+    if (
+      itemCat === candCat &&
+      itemColorFam === candColorFam &&
+      String(it.color || "").toLowerCase() !== "unassigned"
+    ) {
+      seenIds.add(it.id);
+      matched.push(it);
+    }
+  });
+
+  return matched.slice(0, 4);
+}
+
 function renderEvaluationResults(data) {
   const resultsSec = document.getElementById("evalResultsSection");
   if (!resultsSec) return;
 
-  // 1. Recommendation Badge
+  // 1. Recommendation Header & Editorial Framing (BUY vs PASS vs THINK TWICE)
   const badgeEl = document.getElementById("evalDecisionBadge");
+  const headerPanel = document.getElementById("evalHeaderPanel");
+  const outcomeKicker = document.getElementById("evalOutcomeKicker");
+  const outcomeHeading = document.getElementById("evalOutcomeHeading");
+
   const rawDecision = String(data.decision || "BUY").toUpperCase();
-  badgeEl.textContent = rawDecision;
+  const normalizedDecision =
+    rawDecision === "PASS" || rawDecision === "DON'T BUY"
+      ? "PASS"
+      : rawDecision === "BUY"
+      ? "BUY"
+      : "THINK TWICE";
+
+  badgeEl.textContent = normalizedDecision;
   badgeEl.className = "eval-badge";
-  if (rawDecision === "BUY") {
+  if (headerPanel) {
+    headerPanel.className = "eval-panel eval-header-panel";
+  }
+
+  if (normalizedDecision === "BUY") {
     badgeEl.classList.add("decision-buy");
-  } else if (rawDecision === "PASS" || rawDecision === "DON'T BUY") {
+    headerPanel?.classList.add("outcome-buy");
+    if (outcomeKicker) {
+      outcomeKicker.textContent = "Archive Verdict // Approved Wardrobe Addition";
+    }
+    if (outcomeHeading) {
+      outcomeHeading.textContent = "High Versatility & Low Overlap";
+    }
+  } else if (normalizedDecision === "PASS") {
     badgeEl.classList.add("decision-pass");
+    headerPanel?.classList.add("outcome-pass");
+    if (outcomeKicker) {
+      outcomeKicker.textContent = "Wardrobe Overlap Detected // Smart Textile Preservation";
+    }
+    if (outcomeHeading) {
+      outcomeHeading.textContent = "Shop Your Existing Archive Instead";
+    }
   } else {
     badgeEl.classList.add("decision-think");
+    headerPanel?.classList.add("outcome-think");
+    if (outcomeKicker) {
+      outcomeKicker.textContent = "Mindful Consideration // Evaluate Silhouette Upgrade";
+    }
+    if (outcomeHeading) {
+      outcomeHeading.textContent = "Moderate Overlap or Selective Styling Utility";
+    }
   }
 
   // 2. Candidate Metadata Pills
@@ -832,56 +913,112 @@ function renderEvaluationResults(data) {
     <span class="meta-pill">vibe: ${escapeHtml(cand.aesthetic || "contemporary")}</span>
   `;
 
-  // 3. Reasoning Summary
+  // 3. Wardrobe Impact & Metric Strip
   const summaryEl = document.getElementById("evalDecisionSummary");
   summaryEl.textContent = data.decision_summary || "";
 
-  // 4. Outfit Potential Metric
   const countEl = document.getElementById("evalOutfitCount");
   countEl.textContent = data.total_outfit_count ?? 0;
 
-  // 5. Similarity / Redundancy Alert
+  // 4. Wardrobe Overlap Check & Existing Similar Garments
   const redAlert = document.getElementById("evalRedundancyAlert");
   const redIcon = document.getElementById("evalRedundancyIcon");
+  const redKicker = document.getElementById("evalRedundancyKicker");
   const redText = document.getElementById("evalRedundancyText");
-  if (data.is_redundant || (data.redundancy_notes && String(data.redundancy_notes).trim())) {
+  const overlapListEl = document.getElementById("evalOverlapItemsList");
+
+  const hasOverlap =
+    Boolean(data.is_redundant) ||
+    Boolean(data.redundancy_notes && String(data.redundancy_notes).trim()) ||
+    normalizedDecision === "PASS";
+
+  const overlappingItems = hasOverlap
+    ? findOverlappingWardrobeItems(cand, data.redundancy_notes)
+    : [];
+
+  if (hasOverlap) {
     redAlert.className = "eval-redundancy-alert is-redundant";
-    redIcon.textContent = "⚠️";
+    redIcon.textContent = "♻️";
+    if (redKicker) {
+      redKicker.textContent = "Wardrobe Overlap Detected // Smart Textile Preservation";
+    }
     redText.textContent =
-      data.redundancy_notes || "Similar pieces already exist in your wardrobe catalog.";
+      data.redundancy_notes ||
+      "Comparable pieces already exist in your wardrobe archive — skipping this duplicate preserves closet space and textiles.";
+
+    if (overlapListEl && overlappingItems.length > 0) {
+      overlapListEl.innerHTML = overlappingItems
+        .map(
+          (item) => `
+          <div class="eval-overlap-chip">
+            <div class="eval-overlap-thumb">
+              <img
+                src="${escapeHtml(item.image_url)}"
+                alt="${escapeHtml(item.type)}"
+                loading="lazy"
+                onerror="this.onerror=null; this.src='/static/placeholder-garment.svg';"
+              />
+            </div>
+            <div class="eval-overlap-meta">
+              <span class="eval-overlap-sku">#${item.id} // ${escapeHtml(normalizeCategoryName(item.category))}</span>
+              <span class="eval-overlap-name">${escapeHtml(item.type)}</span>
+              <span class="eval-overlap-sub">${escapeHtml(item.color)} · ${escapeHtml(item.fit)} fit</span>
+            </div>
+          </div>
+        `
+        )
+        .join("");
+      overlapListEl.style.display = "grid";
+    } else if (overlapListEl) {
+      overlapListEl.innerHTML = "";
+      overlapListEl.style.display = "none";
+    }
   } else {
     redAlert.className = "eval-redundancy-alert not-redundant";
     redIcon.textContent = "✓";
-    redText.textContent = "No redundant overlap — this piece adds fresh versatility to your closet.";
+    if (redKicker) {
+      redKicker.textContent = "Wardrobe Overlap Check // Distinct Archive Piece";
+    }
+    redText.textContent =
+      "No redundant overlap — this candidate piece introduces fresh versatility to your current rotation.";
+    if (overlapListEl) {
+      overlapListEl.innerHTML = "";
+      overlapListEl.style.display = "none";
+    }
   }
 
-  // 6. Top 3 Outfits Visual Cards
+  // 5. Top 3 Outfits Visual Cards (Fixed Aspect Ratio & Graceful Image Fallback)
   const outfitsGrid = document.getElementById("evalTopOutfitsGrid");
   outfitsGrid.innerHTML = "";
   const candidateThumbSrc =
     data.candidate_image_url ||
     state.evalPreviewDataUrl ||
     document.getElementById("evalImagePreview")?.src ||
-    "";
+    "/static/placeholder-garment.svg";
 
   const topOutfits = Array.isArray(data.top_outfits) ? data.top_outfits.slice(0, 3) : [];
   if (topOutfits.length === 0) {
     outfitsGrid.innerHTML = `
       <div class="eval-empty-outfits">
-        Add more garments to your closet catalog to preview complete outfit pairings with this candidate piece.
+        <span class="eval-empty-kicker">Lookbook Simulation</span>
+        <p>No compatible pairings found with your current archive.</p>
       </div>
     `;
   } else {
     topOutfits.forEach((outfit, idx) => {
-      // Resolve existing closet items from either hydrated `existing_items` or `existing_item_ids`
-      let matchedItems = Array.isArray(outfit.existing_items) && outfit.existing_items.length
-        ? outfit.existing_items
-        : (outfit.existing_item_ids || []).map(resolveClosetItemById).filter(Boolean);
+      const matchedItems =
+        Array.isArray(outfit.existing_items) && outfit.existing_items.length
+          ? outfit.existing_items
+          : (outfit.existing_item_ids || []).map(resolveClosetItemById).filter(Boolean);
 
       const candidateTileHtml = candidateThumbSrc
         ? `
-          <div class="eval-thumb-tile is-candidate" title="Candidate: ${escapeHtml(cand.color || '')} ${escapeHtml(cand.category || '')}">
-            <img src="${escapeHtml(candidateThumbSrc)}" alt="Candidate Item" />
+          <div class="eval-thumb-tile is-candidate" title="Candidate: ${escapeHtml(cand.color || "")} ${escapeHtml(cand.category || "")}">
+            <img
+              src="${escapeHtml(candidateThumbSrc)}"
+              alt="Candidate ${escapeHtml(cand.category || "Garment")}"
+              onerror="this.onerror=null; this.src='/static/placeholder-garment.svg';"
+            />
             <div class="eval-thumb-caption candidate-caption">★ NEW (${escapeHtml(cand.category || "Piece")})</div>
           </div>
         `
@@ -891,7 +1028,12 @@ function renderEvaluationResults(data) {
         .map(
           (item) => `
           <div class="eval-thumb-tile" title="#${item.id} ${escapeHtml(item.type)} (${escapeHtml(item.color)})">
-            <img src="${escapeHtml(item.image_url)}" alt="${escapeHtml(item.type)}" loading="lazy" />
+            <img
+              src="${escapeHtml(item.image_url)}"
+              alt="#${item.id} ${escapeHtml(item.type)}"
+              loading="lazy"
+              onerror="this.onerror=null; this.src='/static/placeholder-garment.svg';"
+            />
             <div class="eval-thumb-caption">#${item.id} ${escapeHtml(item.type)}</div>
           </div>
         `
@@ -900,7 +1042,7 @@ function renderEvaluationResults(data) {
 
       const pieceCount = (candidateThumbSrc ? 1 : 0) + matchedItems.length;
 
-      const card = document.createElement("div");
+      const card = document.createElement("article");
       card.className = "eval-outfit-card";
       card.innerHTML = `
         <div class="eval-outfit-header">
@@ -915,7 +1057,7 @@ function renderEvaluationResults(data) {
           ${existingTilesHtml}
         </div>
         <div class="eval-outfit-tips">
-          <span class="eval-tips-label">Styling Note</span>
+          <span class="eval-tips-label">Styling Rationale</span>
           <p>${escapeHtml(outfit.styling_tips || "")}</p>
         </div>
       `;

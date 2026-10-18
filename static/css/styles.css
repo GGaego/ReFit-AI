@@ -221,6 +221,18 @@ html, body {
   background-color: var(--bg-subtle);
 }
 
+.btn-scanner {
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  font-weight: 600;
+}
+
+.btn-scanner:hover:not(:disabled) {
+  background-color: var(--accent-black);
+  color: #FFFFFF;
+}
+
 .btn-ghost {
   background: transparent;
   color: var(--text-secondary);
@@ -235,6 +247,28 @@ html, body {
 .btn-sm {
   font-size: 0.74rem;
   padding: 5px 10px;
+}
+
+/* Bookmark / Save Look Button States */
+.btn-bookmark {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 5px 11px;
+  border-radius: var(--radius-sm);
+  transition: all 0.16s ease;
+}
+
+.btn-saved {
+  background-color: var(--accent-black);
+  color: #FFFFFF;
+  border-color: var(--accent-black);
+}
+
+.btn-saved:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 /* --------------------------------------------------------------------------
@@ -432,6 +466,11 @@ html, body {
   border-color: #D4D4D8;
 }
 
+.product-card.is-unassigned {
+  border-style: dashed;
+  border-color: #F59E0B;
+}
+
 .card-media {
   position: relative;
   aspect-ratio: 4 / 4.6;
@@ -444,6 +483,7 @@ html, body {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
   transition: transform 0.35s ease;
 }
 
@@ -476,6 +516,12 @@ html, body {
   border-radius: var(--radius-sm);
   border: 1px solid rgba(0, 0, 0, 0.08);
   color: var(--text-primary);
+}
+
+.sku-badge.badge-unassigned {
+  background: var(--status-never-bg);
+  color: var(--status-never-text);
+  border-color: #FCD34D;
 }
 
 .worn-tracker-group {
@@ -591,7 +637,8 @@ html, body {
   background: #FFFFFF;
 }
 
-.meta-pill.size-unassigned {
+.meta-pill.size-unassigned,
+.meta-pill.pill-unassigned {
   border-style: dashed;
   color: var(--text-muted);
 }
@@ -641,6 +688,16 @@ html, body {
   width: 110px;
 }
 
+.unassigned-notice-banner {
+  background: var(--status-never-bg);
+  color: var(--status-never-text);
+  border: 1px solid #FDE68A;
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 /* --------------------------------------------------------------------------
    Lookbook Page (Page 2: Outfit Lookbook)
    -------------------------------------------------------------------------- */
@@ -653,8 +710,17 @@ html, body {
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-md);
   padding: 16px 20px;
-  margin-bottom: 28px;
+  margin-bottom: 24px;
   flex-wrap: wrap;
+}
+
+.vibe-selector-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
 }
 
 .vibe-pills {
@@ -687,6 +753,63 @@ html, body {
   border-color: var(--accent-black);
 }
 
+/* Vibe Insufficiency Feedback Banner */
+.insufficiency-banner {
+  background: #FFFBEB;
+  border: 1px solid #F59E0B;
+  border-left: 4px solid var(--accent-black);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  box-shadow: var(--shadow-card);
+}
+
+.insufficiency-banner-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+  min-width: 240px;
+}
+
+.insufficiency-banner-icon {
+  font-size: 1.2rem;
+  line-height: 1.2;
+}
+
+.insufficiency-banner-text-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.insufficiency-banner-kicker {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #92400E;
+}
+
+.insufficiency-banner-message {
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.45;
+}
+
+.insufficiency-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .lookbook-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
@@ -707,12 +830,16 @@ html, body {
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-card);
-  transition: box-shadow 0.22s ease, transform 0.22s ease;
+  transition: box-shadow 0.22s ease, transform 0.22s ease, border-color 0.22s ease;
 }
 
 .lookbook-card:hover {
   box-shadow: var(--shadow-hover);
   transform: translateY(-2px);
+}
+
+.lookbook-card.is-saved {
+  border-color: var(--accent-black);
 }
 
 .lookbook-card-header {
@@ -722,6 +849,14 @@ html, body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.lookbook-header-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .look-kicker {
@@ -752,8 +887,8 @@ html, body {
 
 .collage-tile {
   position: relative;
-  aspect-ratio: 3 / 3.8;
-  background: #F4F4F6;
+  aspect-ratio: 3 / 4;
+  background: #F3F4F6;
   overflow: hidden;
 }
 
@@ -761,6 +896,7 @@ html, body {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
   transition: transform 0.3s ease;
 }
 
@@ -876,6 +1012,12 @@ html, body {
   gap: 12px;
 }
 
+.lookbook-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* --------------------------------------------------------------------------
    Empty States & Modals
    -------------------------------------------------------------------------- */
@@ -942,6 +1084,10 @@ html, body {
   animation: modalSlideUp 0.2s ease;
 }
 
+.modal-dialog.modal-lg {
+  max-width: 980px;
+}
+
 @keyframes modalSlideUp {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
@@ -953,11 +1099,18 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .modal-title {
   font-size: 1rem;
   font-weight: 600;
+}
+
+.modal-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
 }
 
 .modal-close {
@@ -977,7 +1130,7 @@ html, body {
   padding: 22px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 
 .modal-footer {
@@ -1010,6 +1163,18 @@ html, body {
 .dropzone.dragover {
   border-color: var(--text-primary);
   background: var(--bg-subtle);
+}
+
+.dropzone-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.dropzone-sub {
+  font-size: 0.77rem;
+  color: var(--text-muted);
 }
 
 .preview-container {
@@ -1080,6 +1245,570 @@ html, body {
   border-color: var(--text-primary);
 }
 
+/* --------------------------------------------------------------------------
+   Feature 1: "Buy Less" In-Store Evaluator — Structured Editorial Layout
+   -------------------------------------------------------------------------- */
+.eval-input-panel {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.eval-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.eval-helper-tag {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.eval-capture-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 14px;
+  align-items: stretch;
+}
+
+@media (max-width: 680px) {
+  .eval-capture-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.eval-dropzone {
+  padding: 24px 18px;
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.eval-preview-box {
+  width: 120px;
+  height: 150px;
+  aspect-ratio: 4 / 5;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hairline);
+  background: #F3F4F6;
+  overflow: hidden;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.eval-preview-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.eval-results-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 4px;
+}
+
+.eval-section-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+.eval-section-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-hairline);
+}
+
+.eval-panel-kicker {
+  font-family: var(--font-mono);
+  font-size: 0.67rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* Panel 1: Recommendation Header & Candidate Metadata */
+.eval-header-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  box-shadow: var(--shadow-card);
+}
+
+.eval-header-panel.outcome-buy {
+  border-left: 4px solid #166534;
+}
+
+.eval-header-panel.outcome-pass {
+  border-left: 4px solid var(--accent-black);
+}
+
+.eval-header-panel.outcome-think {
+  border-left: 4px solid #B45309;
+}
+
+.eval-verdict-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.eval-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.eval-verdict-titles {
+  display: flex;
+  flex-direction: column;
+}
+
+.eval-outcome-heading {
+  font-family: var(--font-serif);
+  font-size: 1.35rem;
+  font-weight: 400;
+  font-style: italic;
+  color: var(--text-primary);
+  line-height: 1.15;
+}
+
+.eval-candidate-tags-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+@media (max-width: 680px) {
+  .eval-candidate-tags-wrap {
+    align-items: flex-start;
+  }
+}
+
+.eval-badge {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+}
+
+.eval-badge.decision-buy {
+  background: #DCFCE7;
+  color: #166534;
+  border-color: #86EFAC;
+}
+
+.eval-badge.decision-pass {
+  background: var(--accent-black);
+  color: #FFFFFF;
+  border-color: var(--accent-black);
+}
+
+.eval-badge.decision-think {
+  background: #FEF3C7;
+  color: #92400E;
+  border-color: #FDE68A;
+}
+
+/* Panel 2: Wardrobe Impact & Metric Strip */
+.eval-verdict-banner {
+  display: grid;
+  grid-template-columns: 1fr 165px;
+  gap: 16px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .eval-verdict-banner {
+    grid-template-columns: 1fr;
+  }
+}
+
+.eval-verdict-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.eval-summary-text {
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  line-height: 1.54;
+}
+
+.eval-metric-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.eval-metric-value {
+  font-family: var(--font-mono);
+  font-size: 1.65rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+
+.eval-metric-label {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* Panel 3: Wardrobe Overlap Check */
+.eval-redundancy-alert {
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  border: 1px solid var(--border-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.eval-redundancy-alert.not-redundant {
+  background: #F0FDF4;
+  border-color: #BBF7D0;
+}
+
+.eval-redundancy-alert.is-redundant {
+  background: #FFFBEB;
+  border-color: #FDE68A;
+}
+
+.eval-redundancy-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.eval-redundancy-icon {
+  font-size: 1.05rem;
+  line-height: 1.3;
+}
+
+.eval-redundancy-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.eval-redundancy-kicker {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-primary);
+}
+
+.eval-redundancy-copy {
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  line-height: 1.48;
+}
+
+.eval-overlap-items-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(15, 15, 15, 0.12);
+}
+
+.eval-overlap-chip {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.eval-overlap-thumb {
+  width: 44px;
+  height: 55px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #F3F4F6;
+  border: 1px solid var(--border-hairline);
+  flex-shrink: 0;
+}
+
+.eval-overlap-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.eval-overlap-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.eval-overlap-sku {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.eval-overlap-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: capitalize;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eval-overlap-sub {
+  font-family: var(--font-mono);
+  font-size: 0.67rem;
+  color: var(--text-secondary);
+}
+
+/* Panel 4: Top Outfit Pairings & Standardized Thumbnails */
+.eval-outfits-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.eval-outfits-heading-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.eval-outfits-title {
+  font-size: 0.96rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.eval-outfits-sub {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.eval-outfits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.eval-outfit-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: var(--shadow-card);
+}
+
+.eval-outfit-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.eval-outfit-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.eval-outfit-vibe {
+  font-family: var(--font-mono);
+  font-size: 0.67rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.eval-outfit-count-pill {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-hairline);
+}
+
+.eval-outfit-title {
+  font-family: var(--font-serif);
+  font-size: 1.3rem;
+  font-style: italic;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.eval-outfit-thumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.eval-thumb-tile {
+  width: 100px;
+  height: 125px;
+  aspect-ratio: 4 / 5;
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: #F3F4F6;
+  border: 1px solid var(--border-hairline);
+  flex-shrink: 0;
+}
+
+.eval-thumb-tile.is-candidate {
+  border: 1.5px solid var(--accent-black);
+}
+
+.eval-thumb-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.eval-thumb-caption {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  right: 4px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(4px);
+  padding: 2px 5px;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.eval-thumb-caption.candidate-caption {
+  background: rgba(15, 15, 15, 0.9);
+  color: #FFFFFF;
+  font-weight: 600;
+}
+
+.eval-outfit-tips {
+  background: var(--bg-canvas);
+  border-left: 2px solid var(--accent-black);
+  padding: 10px 12px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: auto;
+}
+
+.eval-tips-label {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.eval-outfit-tips p {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.46;
+}
+
+.eval-empty-outfits {
+  background: var(--bg-canvas);
+  border: 1px dashed var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 28px 20px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.eval-empty-kicker {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Toasts & Spinners
+   -------------------------------------------------------------------------- */
 .toast-container {
   position: fixed;
   bottom: 24px;
@@ -1088,6 +1817,7 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  max-width: 420px;
 }
 
 .toast {
@@ -1096,11 +1826,18 @@ html, body {
   padding: 12px 18px;
   border-radius: var(--radius-sm);
   font-size: 0.82rem;
+  line-height: 1.4;
   box-shadow: var(--shadow-modal);
   display: flex;
   align-items: center;
   gap: 10px;
   animation: modalSlideUp 0.2s ease;
+}
+
+.toast.warning {
+  background: #92400E;
+  color: #FFFFFF;
+  border-left: 4px solid #FDE68A;
 }
 
 .toast.error {

@@ -304,44 +304,62 @@
             </div>
           </div>
 
-          <!-- Evaluation Results Section -->
-          <div id="evalResultsSection" class="eval-results-wrap" aria-live="polite">
+          <!-- Evaluation Results Section (Structured Editorial Panels) -->
+          <div id="evalResultsSection" class="eval-results-wrap" aria-live="polite" style="display: none;">
             <div class="eval-section-divider">
-              <span>Buy Less Recommendation &amp; Closet Analysis</span>
+              <span>Editorial Purchase Dossier // Closet Analysis</span>
             </div>
 
-            <!-- Verdict & Outfit Metric Banner -->
-            <div class="eval-verdict-banner">
-              <div class="eval-verdict-main">
-                <div class="eval-verdict-header">
+            <!-- Panel 1: Recommendation Header & Candidate Metadata -->
+            <div class="eval-panel eval-header-panel" id="evalHeaderPanel">
+              <div class="eval-verdict-top">
+                <div class="eval-badge-group">
                   <span id="evalDecisionBadge" class="eval-badge decision-buy">BUY</span>
+                  <div class="eval-verdict-titles">
+                    <span id="evalOutcomeKicker" class="eval-panel-kicker">Archive Verdict // Approved Addition</span>
+                    <h4 id="evalOutcomeHeading" class="eval-outcome-heading">High Wardrobe Utility</h4>
+                  </div>
+                </div>
+                <div class="eval-candidate-tags-wrap">
+                  <span class="eval-panel-kicker">Candidate Garment Profile</span>
                   <div id="evalCandidateMeta" class="metadata-pills"></div>
                 </div>
+              </div>
+            </div>
+
+            <!-- Panel 2: Wardrobe Impact & Metric Strip -->
+            <div class="eval-verdict-banner">
+              <div class="eval-verdict-main">
+                <span class="eval-panel-kicker">Stylist Assessment &amp; Rationale</span>
                 <p id="evalDecisionSummary" class="eval-summary-text"></p>
               </div>
               <div class="eval-metric-box">
                 <div id="evalOutfitCount" class="eval-metric-value">0</div>
-                <div class="eval-metric-label">Outfit Potential</div>
+                <div class="eval-metric-label">Unlocked Outfits</div>
               </div>
             </div>
 
-            <!-- Similarity / Redundancy Alert -->
+            <!-- Panel 3: Wardrobe Overlap Check -->
             <div id="evalRedundancyAlert" class="eval-redundancy-alert not-redundant">
-              <span id="evalRedundancyIcon" class="eval-redundancy-icon">✓</span>
-              <div class="eval-redundancy-body">
-                <span class="eval-redundancy-kicker">Wardrobe Overlap Check</span>
-                <span id="evalRedundancyText">No redundant duplicates detected in your current closet.</span>
+              <div class="eval-redundancy-top">
+                <span id="evalRedundancyIcon" class="eval-redundancy-icon">✓</span>
+                <div class="eval-redundancy-body">
+                  <span id="evalRedundancyKicker" class="eval-redundancy-kicker">Wardrobe Overlap Check // Clean Archive Addition</span>
+                  <p id="evalRedundancyText" class="eval-redundancy-copy">No redundant duplicates detected in your current closet.</p>
+                </div>
               </div>
+              <div id="evalOverlapItemsList" class="eval-overlap-items-list" style="display: none;"></div>
             </div>
 
-            <!-- Top 3 Outfits -->
+            <!-- Panel 4: Top Outfit Pairings -->
             <div class="eval-outfits-section">
               <div class="eval-outfits-heading-row">
-                <span class="manifest-heading" style="margin-bottom: 0;">
-                  Top 3 Outfits with Your Existing Closet
-                </span>
+                <div>
+                  <span class="eval-panel-kicker">Lookbook Simulation</span>
+                  <h4 class="eval-outfits-title">Top Outfit Pairings with Your Existing Closet</h4>
+                </div>
                 <span class="eval-outfits-sub">
-                  Candidate piece styled with items you already own
+                  Candidate piece styled alongside garments you already own
                 </span>
               </div>
               <div id="evalTopOutfitsGrid" class="eval-outfits-grid"></div>
