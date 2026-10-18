@@ -16,7 +16,7 @@
    - Uploading a garment without an active Gemini API key or during network failures safely saves the item with fallback defaults (`name`/`type`: `"Clothing Item"`, `category`: `"Unassigned"`, `color`: `"Unassigned"`, `fit`: `"Unassigned"`, `size`: `null`, `style_notes`/`description`: `"Unassigned"`).
    - Displays a non-blocking toast notice (*"AI tagging unavailable. Defaults set to Unassigned — please edit manually."*) and prompts the user in the Edit Modal to categorize the piece.
 
-## Project Structure
+## Project Structure 
 
 ```text
 smart_closet/
