@@ -5,7 +5,6 @@ import uuid
 import base64
 import hashlib
 import mimetypes
-from datetime import date
 from typing import Dict, Any, List, Optional, Tuple
 
 from flask import (
