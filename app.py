@@ -349,7 +349,6 @@ def normalize_garment_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
 
 def analyze_garment_with_gemini(
     filepath: str,
-    original_filename: str = "",
     api_key: Optional[str] = None
 ) -> Tuple[Dict[str, Any], str, bool]:
     """
@@ -1689,7 +1688,6 @@ def api_upload_cloth():
     # 5. Call Gemini Vision API (with Unassigned fallback when key is missing or call fails)
     metadata, engine_used, fallback_used = analyze_garment_with_gemini(
         filepath=filepath,
-        original_filename=original_filename,
         api_key=api_key,
     )
 
